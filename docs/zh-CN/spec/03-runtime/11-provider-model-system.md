@@ -102,6 +102,13 @@ pi-ai 去发出 `x-opencode-session`。每个提供商行（AI 服务或 OAuth �
 见 ADR 0256 / #296）。官方 `deepseek.com` 行仍使用空串回填（#223）。该覆盖不改
 `thinkingFormat`。
 
+当 models.dev 记录发布了推理 `effort` 选项且没有 `budget_tokens` 选项时
+（例如 Opus 4.7+、Opus 5.x、Fable），Anthropic Messages 请求会设置
+`forceAdaptiveThinking: true`。这些模型会以 HTTP 400 拒绝
+`thinking.type=enabled`，而 models.dev 不携带 pi-ai 的 compat 记录，缺少该标志时
+pi-ai 会回落到 budget 思考。仍发布 `budget_tokens` 的模型保持 budget 思考，显式的
+目录 `compat` 记录会被保留。
+
 ## 5. 内置供应商矩阵（发货意图）
 
 > 确切的可用性取决于引脚版本的 pi-ai 支持；产品必须公开所有受支持的产品，并为其余产品保持与 OpenAI 兼容的路径开放。
