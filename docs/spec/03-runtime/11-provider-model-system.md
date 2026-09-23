@@ -107,6 +107,14 @@ missing reasoning is filled with a documented placeholder instead of `""`
 ADR 0256 / #296). Official `deepseek.com` rows keep empty-string fill (#223).
 The overlay does not change `thinkingFormat`.
 
+Anthropic Messages requests set `forceAdaptiveThinking: true` when the
+models.dev record publishes a reasoning `effort` option and no
+`budget_tokens` option (for example Opus 4.7+, Opus 5.x, Fable). Those models
+reject `thinking.type=enabled` with HTTP 400, and models.dev carries no pi-ai
+compat record, so without the flag pi-ai would fall back to budget thinking.
+Models that still publish `budget_tokens` keep budget thinking, and an
+explicit catalog `compat` record is preserved.
+
 ## 5. Built-in vendor matrix (ship intent)
 
 > Model metadata follows the bundled/in-memory models.dev catalog. Provider adapters remain
