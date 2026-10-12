@@ -419,3 +419,40 @@ async fn dispatch_skips_a_blocked_class_for_the_oldest_runnable_request() {
     drop((write_permit, shell_permit, running));
     assert_eq!(budget.snapshot().active, 0);
 }
+
+#[tokio::test]
+async fn session_exclusive_waits_for_in_flight_tools_and_holds_new_ones() {
+    let budget = ToolBudget::new();
+    let bash = budget.acquire("session-a", "Bash").await.unwrap();
+    let other = budget.acquire("session-b", "Write").await.unwrap();
+
+    let mut exclusive =
+        Box::pin(budget.acquire_session_exclusive("session-a", Duration::from_secs(30)));
+    assert!(poll_once(exclusive.as_mut()).is_pending());
+    drop(bash);
+    let held = match poll_once(exclusive.as_mut()) {
+        Poll::Ready(Some(permit)) => permit,
+        _ => panic!("the session became quiet, so the permit must be granted"),
+    };
+
+    // The held session's new tools queue; other sessions are unaffected.
+    let mut queued = Box::pin(budget.acquire("session-a", "Read"));
+    assert!(poll_once(queued.as_mut()).is_pending());
+    drop(budget.acquire("session-b", "Read").await.unwrap());
+    drop(held);
+    drop(admitted(queued.as_mut()));
+    drop(other);
+    assert_eq!(budget.snapshot().active, 0);
+}
+
+#[tokio::test]
+async fn session_exclusive_gives_up_while_a_long_tool_runs() {
+    let budget = ToolBudget::new();
+    let _long = budget.acquire("session-a", "Bash").await.unwrap();
+    assert!(budget
+        .acquire_session_exclusive("session-a", Duration::from_millis(20))
+        .await
+        .is_none());
+    // Giving up holds nothing: the session still admits tools.
+    drop(budget.acquire("session-a", "Read").await.unwrap());
+}

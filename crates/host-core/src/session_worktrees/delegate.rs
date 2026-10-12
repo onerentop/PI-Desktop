@@ -5,14 +5,15 @@
 //! is its owner. When the subagent ends its work is merged back with the same
 //! algorithm as "Merge into project" (`merge::land`): conflicts stay in the
 //! delegate worktree and the session worktree is only fast-forwarded. The
-//! session's mutation permit is held while the session worktree changes, so
-//! the parent's Write/Edit calls never interleave with the merge; anything git
+//! session is held while its worktree changes (`SessionHold`), so the parent's
+//! tools do not interleave with the merge; anything git
 //! still refuses keeps the subagent branch for a later retry, never forced.
 //!
 //! The runtime names a delegate by its chain id, so a resumed subagent keeps
 //! its worktree (and any conflict it has to resolve).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -29,6 +30,7 @@ use super::remove::{drop_admin_entry, remove_worktree};
 use super::{repo_lock, WorktreeError};
 use crate::db::Database;
 use crate::sessions;
+use crate::tool_budget::{SessionExclusivePermit, ToolPermit};
 
 /// What happened to a subagent's worktree when it ended; reported to the
 /// parent agent in the delegate report.
@@ -103,22 +105,45 @@ async fn session_row(state: &SharedState, session_id: &str) -> Result<WorktreeRo
     Ok(row)
 }
 
-/// Commit the session worktree's uncommitted work while holding the session's
-/// mutation permit, so no Write/Edit of the parent lands mid-commit.
+/// How long a subagent's create/merge waits for the session's in-flight tools
+/// before it falls back to holding only the write permit.
+const SESSION_QUIET_WAIT: Duration = Duration::from_secs(5);
+
+/// Keeps the session's own tools away from its worktree while held.
+enum SessionHold {
+    /// No tool of the session runs; new ones wait.
+    Exclusive { _permit: SessionExclusivePermit },
+    /// A long tool (for example a test run in Bash) kept running: only the
+    /// parent's Write/Edit are held back. git refuses what still collides,
+    /// which keeps the subagent branch instead of forcing it.
+    Writes { _permit: ToolPermit },
+}
+
+/// Commit the session worktree's uncommitted work while holding the session
+/// (see `SessionHold`), so no tool of the parent lands mid-commit.
 async fn checkpoint_session(
     state: &SharedState,
     git: &GitRunner,
     session_id: &str,
     session: &WorktreeRow,
     message: &str,
-) -> Result<crate::tool_budget::ToolPermit, WorktreeError> {
+) -> Result<SessionHold, WorktreeError> {
     let budget = state.lock().await.tool_budget.clone();
-    let permit = budget.acquire(session_id, "Write").await.map_err(|_| {
-        WorktreeError::new(
-            "WORKTREE_BUSY",
-            "the session is busy writing files; try again",
-        )
-    })?;
+    let hold = match budget
+        .acquire_session_exclusive(session_id, SESSION_QUIET_WAIT)
+        .await
+    {
+        Some(permit) => SessionHold::Exclusive { _permit: permit },
+        None => {
+            let permit = budget.acquire(session_id, "Write").await.map_err(|_| {
+                WorktreeError::new(
+                    "WORKTREE_BUSY",
+                    "the session is busy writing files; try again",
+                )
+            })?;
+            SessionHold::Writes { _permit: permit }
+        }
+    };
     let root = Path::new(&session.path);
     if merge_in_progress(git, root).await? {
         return Err(WorktreeError::new(
@@ -127,7 +152,7 @@ async fn checkpoint_session(
         ));
     }
     commit_all(git, root, message).await?;
-    Ok(permit)
+    Ok(hold)
 }
 
 /// Re-create a vanished delegate worktree on its existing branch so the

@@ -282,3 +282,20 @@ async fn a_vanished_subagent_folder_keeps_and_reattaches_its_branch() {
     ));
     assert_eq!(read(&env.session_root.join("g.txt")), "committed");
 }
+
+/// A long parent tool (for example a test run in Bash) never blocks the
+/// subagent: after a bounded wait it merges holding only the write permit.
+#[tokio::test]
+async fn a_long_parent_tool_does_not_block_the_merge_back() {
+    let env = env().await;
+    let a = env.create("chain-a").await;
+    fs::write(a.join("g.txt"), "subagent").unwrap();
+    let budget = env.state.lock().await.tool_budget.clone();
+    let _long_bash = budget.acquire(&env.session, "Bash").await.unwrap();
+
+    assert!(matches!(
+        env.settle("chain-a", true).await,
+        DelegateSettlement::Merged { .. }
+    ));
+    assert_eq!(read(&env.session_root.join("g.txt")), "subagent");
+}
