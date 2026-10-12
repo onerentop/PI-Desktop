@@ -21,7 +21,13 @@ export function WorktreeSetupCommandDialog({
   const [command, setCommand] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
-  useEffect(() => () => void (alive.current = false), []);
+  useEffect(() => {
+    // Reset on (re)mount: StrictMode runs this cleanup once before the real mount.
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     api

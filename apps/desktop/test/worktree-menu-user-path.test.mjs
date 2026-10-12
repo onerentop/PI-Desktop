@@ -21,6 +21,7 @@ import { initReactI18next } from "react-i18next";
 import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
 import { IPC } from "@pi-desktop/shared";
 import { WorktreeProjectMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
+import { WorktreeMergeDialog } from "../../apps/desktop/src/features/worktree/WorktreeMergeDialog";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
 await i18n.use(initReactI18next).init({ lng: "en", keySeparator: false,
@@ -34,6 +35,11 @@ const probes = {
 const pending = [];
 window.piDesktop = { platform: "linux", on() { return () => {}; },
   invoke(channel, payload) {
+    if (channel === IPC.invoke.worktreePreview) {
+      return Promise.resolve({ ok: true, data: { branch: "pi-desktop/s1", ownerBranch: "main",
+        commits: [{ sha: "abc", subject: "edit f" }], files: [{ status: "M", path: "f.txt", uncommitted: false }],
+        conflict: false, previewToken: "t" } });
+    }
     if (channel !== IPC.invoke.worktreeProbe) throw new Error("Unexpected IPC " + channel);
     return new Promise((resolve) => pending.push(() => resolve({ ok: true, data: probes[payload.projectPath] })));
   } };
@@ -79,11 +85,22 @@ window.menuProbe = async () => {
   check(JSON.stringify(created) === JSON.stringify([{ projectPath: "/repo", isolated: true }]), "session not created: " + JSON.stringify(created));
   check(toasts.length === 0, "unexpected toast " + JSON.stringify(toasts));
   flushSync(() => rootNode.unmount());
+
+  // The app renders under StrictMode, which mounts every effect twice; the
+  // merge preview must still leave the loading state.
+  const dialogRoot = createRoot(document.getElementById("root"));
+  flushSync(() => dialogRoot.render(React.createElement(React.StrictMode, null,
+    React.createElement(WorktreeMergeDialog, { sessionId: "s1", title: "Task", onClose() {} }))));
+  await settle();
+  const confirm = document.querySelector('[data-action="worktree-merge-confirm"]');
+  check(confirm && !confirm.disabled, "merge preview stuck loading under StrictMode");
+  check(document.body.textContent.includes("f.txt"), "preview files not shown");
+  flushSync(() => dialogRoot.unmount());
   return { passed: true };
 };
 `;
 
-test("the project menu greys out isolated sessions with the reason and creates one for a git project", {
+test("the project menu greys out isolated sessions with the reason, and the merge preview loads", {
   skip: process.platform === "linux" && !process.env.DISPLAY ? "Electron requires a display" : false,
 }, async () => {
   const temp = await mkdtemp(join(root, "apps/desktop/.worktree-menu-ui-"));
@@ -91,7 +108,8 @@ test("the project menu greys out isolated sessions with the reason and creates o
     await build({
       stdin: { contents: fixture, resolveDir: join(root, "scripts/e2e"), loader: "tsx" },
       outfile: join(temp, "renderer.js"), bundle: true, platform: "browser", format: "esm", jsx: "automatic",
-      define: { "process.env.NODE_ENV": '"production"' },
+      // Development React, like `pnpm dev`: StrictMode double-mounts effects.
+      define: { "process.env.NODE_ENV": '"development"' },
       alias: {
         "@pi-desktop/i18n": join(root, "packages/i18n/src"),
         "@pi-desktop/shared": join(root, "packages/shared/src"),

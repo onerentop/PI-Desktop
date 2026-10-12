@@ -34,7 +34,13 @@ export function WorktreeMergeDialog({
   const [state, setState] = useState<State>({ phase: "loading" });
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
-  useEffect(() => () => void (alive.current = false), []);
+  useEffect(() => {
+    // Reset on (re)mount: StrictMode runs this cleanup once before the real mount.
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   const load = useCallback(
     async (notice?: string) => {
