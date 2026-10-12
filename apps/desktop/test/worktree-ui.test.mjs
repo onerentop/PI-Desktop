@@ -326,3 +326,30 @@ test("the behind marker shows only for sessions that lack project commits", () =
   assert.notEqual(isolatedSessionsKey([{ ...isolated, worktree: { ...active, status: "merged" } }]), base);
   assert.equal(isolatedSessionsKey([{ ...isolated, worktree: { ...active, status: "missing" } }]), "");
 });
+
+test("a conflicted session hides the behind marker and cannot sync until it resolves", () => {
+  const { WorktreeBadge, WorktreeSessionMenuItems } = modules.parts;
+  const { useWorktreeUi } = modules.worktreeUi;
+  Object.assign(useWorktreeUi.getInitialState(), { behind: { s1: 3 } });
+  const conflicted = { branch: "pi-desktop/s1", status: "conflict", setupStatus: "none" };
+
+  const badge = wrap(createElement(WorktreeBadge, { worktree: conflicted, sessionId: "s1" }));
+  assert.match(badge, /data-worktree-status="conflict"/);
+  assert.doesNotMatch(badge, /data-worktree-behind/);
+
+  const menu = wrap(
+    createElement(WorktreeSessionMenuItems, {
+      sessionId: "s1",
+      title: "Task",
+      running: false,
+      onDone() {},
+      worktree: conflicted,
+    }),
+  );
+  const sync = menu.slice(menu.indexOf('data-action="worktree-sync"') - 200, menu.indexOf("</button>", menu.indexOf('data-action="worktree-sync"')));
+  assert.match(sync, /disabled=""/);
+  assert.ok(sync.includes(en.sync.resolveFirst), sync);
+  assert.doesNotMatch(sync, /aria-busy/);
+  // Merging stays available: it concludes the resolution.
+  assert.doesNotMatch(menu, /data-action="worktree-merge"[^>]*disabled/);
+});

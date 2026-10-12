@@ -52,7 +52,10 @@ export function WorktreeBadge({
       >
         <Badge tone={tone}>{label}</Badge>
       </span>
-      {sessionId && worktree.status !== "missing" ? <WorktreeBehindMarker sessionId={sessionId} /> : null}
+      {/* A conflicted session cannot sync until it resolves the conflict. */}
+      {sessionId && worktree.status !== "missing" && worktree.status !== "conflict" ? (
+        <WorktreeBehindMarker sessionId={sessionId} />
+      ) : null}
     </>
   );
 }
@@ -140,7 +143,10 @@ export function WorktreeSessionMenuItems({
 }) {
   const { t } = useTranslation();
   const open = useWorktreeUi((s) => s.open);
-  const syncable = Boolean(worktree) && worktree?.status !== "missing";
+  // A conflicted session resolves first; syncing again would only report
+  // the same conflict.
+  const conflicted = worktree?.status === "conflict";
+  const syncable = Boolean(worktree) && worktree?.status !== "missing" && !conflicted;
   // Project commits the session lacks, counted when the menu opens; `-1`
   // when the count failed (syncing still reports the reason).
   const [behind, setBehind] = useState<number | null>(null);
@@ -181,16 +187,22 @@ export function WorktreeSessionMenuItems({
         type="button"
         role="menuitem"
         data-action="worktree-sync"
-        disabled={running || missing || behind === null || behind === 0}
-        aria-busy={behind === null && !missing ? true : undefined}
-        title={behind === 0 ? t("worktree.sync.upToDate") : undefined}
+        disabled={running || !syncable || behind === null || behind === 0}
+        aria-busy={behind === null && syncable ? true : undefined}
+        title={
+          conflicted
+            ? t("worktree.sync.resolveFirst")
+            : behind === 0
+              ? t("worktree.sync.upToDate")
+              : undefined
+        }
         onClick={() => {
           onDone();
           void syncIsolatedSession(sessionId, t);
         }}
       >
         <IconRefresh size={14} />
-        {behind !== null && behind > 0
+        {syncable && behind !== null && behind > 0
           ? t("worktree.sync.menuBehind", { count: behind })
           : t("worktree.sync.menu")}
       </button>

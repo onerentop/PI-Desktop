@@ -34,6 +34,7 @@ export const zhTW = {
       menu: "從專案同步",
       menuBehind: "從專案同步（{{count}} 個新提交）",
       upToDate: "工作階段已包含專案的最新程式碼。",
+      resolveFirst: "請先在工作階段中解決衝突，再合併或同步。",
       success: "已把專案的 {{count}} 個新提交同步到工作階段。",
       conflict: "這些檔案與專案衝突，請在工作階段中解決：",
     },

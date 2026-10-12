@@ -32,6 +32,7 @@ export const en = {
       menu: "Sync from project",
       menuBehind: "Sync from project ({{count}} new)",
       upToDate: "The session already has the project's latest code.",
+      resolveFirst: "Resolve the conflict in the session first, then merge or sync again.",
       success: "Brought {{count}} new project commit(s) into the session.",
       conflict: "These files conflict with the project. Resolve them in the session:",
     },

@@ -34,6 +34,7 @@ export const ptBR = {
       menu: "Sincronizar do projeto",
       menuBehind: "Sincronizar do projeto ({{count}} novos)",
       upToDate: "A sessão já tem o código mais recente do projeto.",
+      resolveFirst: "Resolva primeiro o conflito na sessão e depois mescle ou sincronize de novo.",
       success: "{{count}} commit(s) novo(s) do projeto trazido(s) para a sessão.",
       conflict: "Estes arquivos conflitam com o projeto. Resolva-os na sessão:",
     },

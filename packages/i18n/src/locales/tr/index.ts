@@ -34,6 +34,7 @@ export const tr = {
       menu: "Projeden eşitle",
       menuBehind: "Projeden eşitle ({{count}} yeni)",
       upToDate: "Oturum zaten projenin en güncel koduna sahip.",
+      resolveFirst: "Önce oturumdaki çakışmayı çözün, ardından yeniden birleştirin veya eşitleyin.",
       success: "Projeden {{count}} yeni commit oturuma alındı.",
       conflict: "Bu dosyalar projeyle çakışıyor. Bunları oturumda çözün:",
     },

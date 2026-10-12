@@ -34,6 +34,7 @@ export const fr = {
       "menu": "Synchroniser depuis le projet",
       "menuBehind": "Synchroniser depuis le projet ({{count}} nouveaux)",
       "upToDate": "La session contient déjà le code le plus récent du projet.",
+      "resolveFirst": "Résolvez d'abord le conflit dans la session, puis fusionnez ou synchronisez à nouveau.",
       "success": "{{count}} nouveau(x) commit(s) du projet intégré(s) à la session.",
       "conflict": "Ces fichiers sont en conflit avec le projet. Résolvez-les dans la session :",
     },

@@ -34,6 +34,7 @@ export const de = {
       "menu": "Aus Projekt synchronisieren",
       "menuBehind": "Aus Projekt synchronisieren ({{count}} neu)",
       "upToDate": "Die Sitzung hat bereits den neuesten Projektstand.",
+      "resolveFirst": "Löse zuerst den Konflikt in der Sitzung und führe dann erneut zusammen oder synchronisiere.",
       "success": "{{count}} neue Projekt-Commit(s) in die Sitzung übernommen.",
       "conflict": "Diese Dateien stehen im Konflikt mit dem Projekt. Löse sie in der Sitzung:",
     },

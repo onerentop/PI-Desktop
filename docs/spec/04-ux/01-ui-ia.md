@@ -245,7 +245,8 @@ destination, chat as the home surface, tools and permissions inline.
   listed and stay in the session; the `Conflict` badge clears as soon as the
   session resolves or abandons the conflict, and the next merge concludes it),
   **Sync from project** (labelled with the number of new project commits
-  when the menu opens, disabled when there are none; it merges the project's
+  when the menu opens, disabled when there are none or while the session is
+  conflicted, which also hides the `↓N` marker; it merges the project's
   branch into the session so the session continues on current code, and a
   conflict stays in the session like a merge conflict; a row that lacks project
   commits shows a `↓N` marker next to its badge, read in the background when
