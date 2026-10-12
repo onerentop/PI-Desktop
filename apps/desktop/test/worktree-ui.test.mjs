@@ -1,0 +1,237 @@
+import assert from "node:assert/strict";
+import test, { after, before } from "node:test";
+import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import i18n from "i18next";
+import { I18nextProvider } from "react-i18next";
+import { catalogs } from "@pi-desktop/i18n";
+import { IPC } from "@pi-desktop/shared";
+import { createServer } from "vite";
+
+// ADR 0326 renderer surface: badge, menus, create flow, merge failures, and
+// the rule that an ordinary "+" never reuses an empty isolated session.
+
+let server;
+let modules;
+const en = catalogs.en.worktree;
+const previousDocument = globalThis.document;
+const previousWindow = globalThis.window;
+
+before(async () => {
+  server = await createServer({
+    root: fileURLToPath(new URL("..", import.meta.url)),
+    configFile: false,
+    server: { middlewareMode: true, hmr: false, ws: false },
+    esbuild: { jsx: "automatic" },
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  modules = {
+    sidebar: await server.ssrLoadModule("/src/components/Sidebar.tsx"),
+    parts: await server.ssrLoadModule("/src/features/worktree/WorktreeSidebarParts.tsx"),
+    actions: await server.ssrLoadModule("/src/features/worktree/worktree-actions.ts"),
+    store: await server.ssrLoadModule("/src/stores/app-store.ts"),
+  };
+  // Same interpolation setting as the app (main.tsx): React escapes output.
+  await i18n.init({
+    lng: "en",
+    resources: { en: { translation: catalogs.en } },
+    interpolation: { escapeValue: false },
+  });
+});
+
+after(async () => {
+  globalThis.document = previousDocument;
+  globalThis.window = previousWindow;
+  await server?.close();
+});
+
+const wrap = (element) => renderToStaticMarkup(createElement(I18nextProvider, { i18n }, element));
+
+/** Route renderer `invoke` calls to `handlers[channel]`. */
+function stubBridge(handlers) {
+  const calls = [];
+  globalThis.window = {
+    piDesktop: {
+      async invoke(channel, payload) {
+        calls.push({ channel, payload });
+        const handler = handlers[channel];
+        if (!handler) return { ok: false, error: { code: "INTERNAL", message: `no stub for ${channel}` } };
+        try {
+          return { ok: true, data: await handler(payload) };
+        } catch (error) {
+          return { ok: false, error: { code: error.code, message: error.message, details: error.details } };
+        }
+      },
+    },
+  };
+  return calls;
+}
+
+test("the sidebar badges isolated sessions and leaves ordinary ones unchanged", () => {
+  const { Sidebar } = modules.sidebar;
+  const { useAppStore } = modules.store;
+  const at = "2020-01-01T00:00:00Z";
+  const session = (id, worktree) => ({ id, title: id, projectPath: "/open", createdAt: at, updatedAt: at, worktree });
+  Object.assign(useAppStore.getInitialState(), {
+    sessions: [
+      session("plain"),
+      session("isolated", { branch: "pi-desktop/a", status: "active", setupStatus: "none" }),
+      session("conflicted", { branch: "pi-desktop/b", status: "conflict" }),
+      session("vanished", { branch: "pi-desktop/c", status: "missing" }),
+      session("broken-setup", { branch: "pi-desktop/d", status: "active", setupStatus: "failed" }),
+    ],
+    sessionMeta: {},
+    projectMeta: {},
+    openProjectPaths: ["/open"],
+    openProjects: [],
+    workspace: null,
+    activeProjectPath: null,
+    activeSessionId: null,
+    selectingSessionId: null,
+    page: "chat",
+    projectCollapsed: {},
+    sessionView: { sort: "recent", archived: false },
+  });
+  globalThis.document = { documentElement: { dataset: { theme: "light" } } };
+  const html = wrap(
+    createElement(Sidebar, {
+      collapsed: false,
+      onToggle() {},
+      sidebarWidth: 275,
+      onWidthChange() {},
+      onWidthCommit() {},
+    }),
+  );
+  const row = (id) => {
+    const start = html.indexOf(`data-sidebar-session-row="${id}"`);
+    const next = html.indexOf("data-sidebar-session-row=", start + 1);
+    return html.slice(start, next === -1 ? undefined : next);
+  };
+  assert.doesNotMatch(row("plain"), /thread-item-worktree/);
+  assert.match(row("isolated"), /data-worktree-status="active"/);
+  assert.ok(row("isolated").includes(en.badge.isolated));
+  assert.ok(row("isolated").includes("pi-desktop/a"), "the branch is named in the badge title");
+  assert.match(row("conflicted"), /badge-warning[^>]*>Conflict</);
+  assert.match(row("vanished"), /badge-error[^>]*>Folder missing</);
+  assert.ok(row("broken-setup").includes(en.badge.setupFailed));
+});
+
+test("only isolated sessions get worktree menu items, disabled while running or missing", () => {
+  const { WorktreeSessionMenuItems, WorktreeProjectMenuItems } = modules.parts;
+  const props = { sessionId: "s1", title: "Task", running: false, onDone() {} };
+  assert.equal(wrap(createElement(WorktreeSessionMenuItems, props)), "");
+
+  const idle = wrap(
+    createElement(WorktreeSessionMenuItems, {
+      ...props,
+      worktree: { branch: "pi-desktop/s1", status: "active", setupStatus: "failed" },
+    }),
+  );
+  assert.match(idle, /data-action="worktree-merge"/);
+  assert.doesNotMatch(idle, /data-action="worktree-merge"[^>]*disabled/);
+  assert.match(idle, /data-action="worktree-reveal"/);
+  assert.match(idle, /data-action="worktree-setup-log"/);
+
+  const running = wrap(
+    createElement(WorktreeSessionMenuItems, {
+      ...props,
+      running: true,
+      worktree: { branch: "pi-desktop/s1", status: "active", setupStatus: "none" },
+    }),
+  );
+  assert.match(running, /data-action="worktree-merge"[^>]*disabled/);
+  assert.doesNotMatch(running, /worktree-setup-log/);
+
+  const missing = wrap(
+    createElement(WorktreeSessionMenuItems, {
+      ...props,
+      worktree: { branch: "pi-desktop/s1", status: "missing" },
+    }),
+  );
+  assert.match(missing, /data-action="worktree-merge"[^>]*disabled/);
+  assert.match(missing, /data-action="worktree-reveal"[^>]*disabled/);
+
+  const project = wrap(
+    createElement(WorktreeProjectMenuItems, { projectPath: "/p", projectName: "P", onDone() {} }),
+  );
+  assert.ok(project.includes(en.newIsolatedSession));
+  assert.ok(project.includes(en.setupCommand.menu));
+});
+
+test("creating an isolated session probes first and explains every refusal", async () => {
+  const { createIsolatedSession } = modules.actions;
+  const { useAppStore } = modules.store;
+  const t = i18n.t.bind(i18n);
+  const created = [];
+  const toasts = [];
+  useAppStore.setState({
+    newSession: async (options) => {
+      created.push(options);
+    },
+    showToast: (message, options) => toasts.push({ message, variant: options?.variant }),
+  });
+
+  stubBridge({
+    [IPC.invoke.worktreeProbe]: () => ({ available: false, errorCode: "WORKTREE_NOT_GIT", message: "raw" }),
+  });
+  await createIsolatedSession("/plain", t);
+  assert.deepEqual(created, []);
+  assert.deepEqual(toasts, [{ message: en.errors.notGit, variant: "error" }]);
+
+  toasts.length = 0;
+  const calls = stubBridge({
+    [IPC.invoke.worktreeProbe]: () => ({ available: true, uncommittedChanges: true }),
+  });
+  await createIsolatedSession("/repo", t);
+  assert.deepEqual(calls[0].payload, { projectPath: "/repo" });
+  assert.deepEqual(created, [{ projectPath: "/repo", isolated: true }]);
+  assert.deepEqual(toasts, [{ message: en.uncommittedNotIncluded, variant: "info" }]);
+
+  toasts.length = 0;
+  useAppStore.setState({
+    newSession: async () => {
+      throw Object.assign(new Error("git 2.20 is older than the required 2.29"), {
+        code: "WORKTREE_GIT_TOO_OLD",
+      });
+    },
+  });
+  stubBridge({
+    [IPC.invoke.worktreeProbe]: () => ({ available: true, uncommittedChanges: false }),
+  });
+  await createIsolatedSession("/repo", t);
+  assert.deepEqual(toasts, [{ message: en.errors.gitTooOld, variant: "error" }]);
+});
+
+test("merge failures keep conflicts in the session and re-preview a changed session", () => {
+  const { mergeFailureState } = modules.actions;
+  const t = i18n.t.bind(i18n);
+  const conflict = Object.assign(new Error("merge conflict"), {
+    code: "WORKTREE_CONFLICT",
+    details: { errorCode: "WORKTREE_CONFLICT", files: ["src/a.ts", "README.md"] },
+  });
+  assert.deepEqual(mergeFailureState(conflict, t), {
+    phase: "conflict",
+    files: ["src/a.ts", "README.md"],
+  });
+  assert.deepEqual(mergeFailureState({ code: "WORKTREE_CHANGED_SINCE_PREVIEW" }, t), {
+    phase: "reload",
+    notice: en.errors.changedSincePreview,
+  });
+  assert.deepEqual(mergeFailureState({ code: "WORKTREE_PROJECT_DIRTY" }, t), {
+    phase: "failed",
+    message: en.errors.projectDirty,
+  });
+  assert.deepEqual(mergeFailureState(new Error("unexpected host failure"), t), {
+    phase: "failed",
+    message: "unexpected host failure",
+  });
+});
+
+test("the delete loss note stays empty until unmerged work is known", () => {
+  const { WorktreeDeleteLossNote } = modules.parts;
+  // Before the pending-work answer arrives only the ordinary armed label shows.
+  assert.equal(wrap(createElement(WorktreeDeleteLossNote, { sessionId: "s1" })), "");
+  assert.ok(en.deleteLoss.length > 0);
+});

@@ -1,0 +1,188 @@
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { SessionWorktreeSummary, WorktreePendingWork } from "@pi-desktop/shared";
+import { IconBranch, IconFileText, IconFolderOpen, IconPullRequest, IconWrench } from "../../components/icons";
+import { Badge } from "../../components/ui";
+import { api } from "../../lib/api";
+import { useAppStore } from "../../stores/app-store";
+import { WorktreeMergeDialog } from "./WorktreeMergeDialog";
+import { WorktreeSetupCommandDialog, WorktreeSetupLogDialog } from "./WorktreeSetupDialogs";
+import { createIsolatedSession, worktreeErrorMessage } from "./worktree-actions";
+import { useWorktreeUi } from "./worktree-ui-store";
+
+/** Session-row badge for an isolated session (PRD R3). */
+export function WorktreeBadge({ worktree }: { worktree?: SessionWorktreeSummary }) {
+  const { t } = useTranslation();
+  if (!worktree) return null;
+  const [tone, label] =
+    worktree.status === "conflict"
+      ? (["warning", t("worktree.badge.conflict")] as const)
+      : worktree.status === "missing"
+        ? (["error", t("worktree.badge.missing")] as const)
+        : worktree.setupStatus === "failed"
+          ? (["warning", t("worktree.badge.setupFailed")] as const)
+          : (["neutral", t("worktree.badge.isolated")] as const);
+  return (
+    <span
+      className="thread-item-worktree"
+      title={t("worktree.badge.title", { branch: worktree.branch })}
+      data-worktree-status={worktree.status}
+    >
+      <Badge tone={tone}>{label}</Badge>
+    </span>
+  );
+}
+
+/** Project-menu items: create an isolated session, edit the setup command. */
+export function WorktreeProjectMenuItems({
+  projectPath,
+  projectName,
+  onDone,
+}: {
+  projectPath: string;
+  projectName: string;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const open = useWorktreeUi((s) => s.open);
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        data-action="new-isolated-session"
+        onClick={() => {
+          onDone();
+          void createIsolatedSession(projectPath, t);
+        }}
+      >
+        <IconBranch size={14} />
+        {t("worktree.newIsolatedSession")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-action="worktree-setup-command"
+        onClick={() => {
+          onDone();
+          open({ kind: "setupCommand", projectPath, projectName });
+        }}
+      >
+        <IconWrench size={14} />
+        {t("worktree.setupCommand.menu")}
+      </button>
+    </>
+  );
+}
+
+/** Session-menu items of an isolated session; nothing for other sessions. */
+export function WorktreeSessionMenuItems({
+  sessionId,
+  title,
+  worktree,
+  running,
+  onDone,
+}: {
+  sessionId: string;
+  title: string;
+  worktree?: SessionWorktreeSummary;
+  running: boolean;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const open = useWorktreeUi((s) => s.open);
+  if (!worktree) return null;
+  const missing = worktree.status === "missing";
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        data-action="worktree-merge"
+        disabled={running || missing}
+        onClick={() => {
+          onDone();
+          open({ kind: "merge", sessionId, title });
+        }}
+      >
+        <IconPullRequest size={14} />
+        {t("worktree.merge.menu")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-action="worktree-reveal"
+        disabled={missing}
+        onClick={() => {
+          onDone();
+          api.revealWorktree(sessionId).catch((error: unknown) =>
+            useAppStore.getState().showToast(worktreeErrorMessage(error, t), { variant: "error" }),
+          );
+        }}
+      >
+        <IconFolderOpen size={14} />
+        {t("worktree.reveal")}
+      </button>
+      {worktree.setupStatus && worktree.setupStatus !== "none" ? (
+        <button
+          type="button"
+          role="menuitem"
+          data-action="worktree-setup-log"
+          onClick={() => {
+            onDone();
+            open({ kind: "setupLog", sessionId, title });
+          }}
+        >
+          <IconFileText size={14} />
+          {t("worktree.setupLog.menu")}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Note after the armed "Delete?" label of an isolated session: deleting removes
+ * its worktree and branch, so unmerged work is named before the second click
+ * (PRD R5). Renders nothing when nothing would be lost.
+ */
+export function WorktreeDeleteLossNote({ sessionId }: { sessionId: string }) {
+  const { t } = useTranslation();
+  const [pending, setPending] = useState<WorktreePendingWork | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .getWorktreePendingWork(sessionId)
+      .then((result) => alive && setPending(result))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
+  if (!pending || (pending.unmergedCommits === 0 && !pending.uncommittedChanges)) return null;
+  return (
+    <span className="worktree-delete-loss" data-worktree-loss="true">
+      {t("worktree.deleteLoss")}
+    </span>
+  );
+}
+
+/** Renders the open worktree dialog. Mounted once by the sidebar. */
+export function WorktreeDialogs() {
+  const dialog = useWorktreeUi((s) => s.dialog);
+  const close = useWorktreeUi((s) => s.close);
+  if (!dialog) return null;
+  if (dialog.kind === "merge") {
+    return <WorktreeMergeDialog sessionId={dialog.sessionId} title={dialog.title} onClose={close} />;
+  }
+  if (dialog.kind === "setupLog") {
+    return <WorktreeSetupLogDialog sessionId={dialog.sessionId} title={dialog.title} onClose={close} />;
+  }
+  return (
+    <WorktreeSetupCommandDialog
+      projectPath={dialog.projectPath}
+      projectName={dialog.projectName}
+      onClose={close}
+    />
+  );
+}
