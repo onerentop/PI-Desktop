@@ -233,6 +233,18 @@ destination, chat as the home surface, tools and permissions inline.
   delete remain separate actions. Rename edits the task label only; archive
   never removes the transcript. Open folder is a project action, not a
   conversation action.
+- **Isolated sessions** (ADR 0326): the project menu offers **New isolated
+  session**. It probes the project on click: an unsuitable project (not git,
+  no commits, detached `HEAD`, missing or old git) gets an error toast naming
+  the reason, and a dirty project gets an info toast that uncommitted changes
+  are not included. The menu also
+  holds **Worktree setup command…**. An isolated row shows an `Isolated` badge
+  (or `Conflict`, `Folder missing`, `Setup failed`) and adds **Merge into
+  project…** (preview of commits and files, then merge; conflicting files are
+  listed and stay in the session), **Show worktree folder**, and **Setup log**.
+  Its delete confirmation states that unmerged work will be lost. Isolated
+  sessions are never reused as the empty draft and cannot move to another
+  project; forks are ordinary sessions.
 - **Temporary-task attachments**: selecting a saved attachment opens its file
   preview even without an open project. Back returns to the no-project browsing
   state. Branches preserve referenced pasted/imported inputs as child-owned

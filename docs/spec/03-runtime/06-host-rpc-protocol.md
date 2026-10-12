@@ -294,6 +294,10 @@ to later refresh and inference; the vendor picker does not collect them.
   `inheritPermissionFromSessionId`; when present, the host copies the existing
   session's persisted permission mode atomically, while omission preserves the
   existing `inherit` default. Missing/null thinking level defaults to `off`.
+  Optional `isolated: true` (ADR 0326) also requires `projectPath` and gives
+  the new session its own git worktree before it returns; if the worktree
+  cannot be created the session is deleted again and the call fails with a
+  `WORKTREE_*` error (§7).
 - `session.fork` — accepts `sessionId`, an optional caller-provided display
   `title`, and optional `throughMessageId`; creates
   one independent session from the source's current active canonical
@@ -327,7 +331,8 @@ to later refresh and inference; the vendor picker does not collect them.
   contains the latest matching Task tool-call projection from the same canonical
   transcript. It is capped separately and does not widen the window or alter its
   cursors. Ordinary and uncapped reads omit this navigation-only field.
-- `session.delete`
+- `session.delete` — for an isolated session, also removes its worktree and
+  branch (discarding unmerged work)
 - `session.getScratchPath` — the session's scratch directory (D114), created
   on demand
 - `session.rename({ id, title })` trims and validates the title at the host
@@ -356,6 +361,7 @@ to later refresh and inference; the vendor picker does not collect them.
   data stay with the session. Blank ids or paths are `INVALID_PARAMS`, an
   unknown session is `NOT_FOUND`, and a session with a running turn is
   `CONFLICT` so a live agent never switches instruction roots mid-turn.
+  An isolated session is refused with `WORKTREE_MOVE_UNSUPPORTED`.
   Additive RPC; no protocol version bump.
 - `session.appendMessage`
 - `session.saveInflightMessage` — Electron-main-only checkpoint of the
@@ -595,6 +601,34 @@ Session summaries/details always return `thinkingLevel`. Assistant messages
 may return `thinking`; host storage maps it to a canonical content block rather
 than appending it to answer `content`.
 
+### Session worktrees (ADR 0326)
+
+Additive `worktree.*` methods; no protocol version bump. Failures use code
+1025 with a `WORKTREE_*` string code.
+
+- `worktree.probe({ projectPath })` → `{ available, uncommittedChanges }`, or
+  `{ available: false, errorCode, message }` when the project cannot host
+  isolated sessions (not git, no commits, detached `HEAD`, git missing or
+  older than 2.29, …).
+- `worktree.preview({ sessionId })` → `{ preview }` with the commits and files
+  that would land and a `previewToken`.
+- `worktree.merge({ sessionId, previewToken })` → `{ outcome }`. A stale token
+  is `WORKTREE_CHANGED_SINCE_PREVIEW`; a dirty project is
+  `WORKTREE_PROJECT_DIRTY`; a conflict is `WORKTREE_CONFLICT` and leaves the
+  worktree conflicted and the project untouched.
+- `worktree.pendingWork({ sessionId })` → `{ pending }`, the unmerged work a
+  delete would discard.
+- `worktree.setupLog({ sessionId })` → `{ setupStatus, log }`.
+- `worktree.location({ sessionId })` → `{ path }`; Electron Main uses it for
+  "Reveal in folder" and never forwards it to the renderer.
+- `worktree.setupCommand.get({ projectPath })` → `{ command }`;
+  `worktree.setupCommand.set({ projectPath, command })` → `{ ok }` (unknown
+  project is `NOT_FOUND`). The command runs once in each new worktree.
+- `worktree.delegate.create({ sessionId, delegationId })` → `{ worktree }` and
+  `worktree.delegate.settle({ sessionId, delegationId, merge })` →
+  `{ settlement }` — agent-runtime only, for `Write`/`Edit` delegates of an
+  isolated session (03-tools-and-permissions §10.2).
+
 ### Tools
 - `tools.list`
 - `tools.execute`
@@ -824,6 +858,9 @@ type ToolsExecuteParams = {
   expectedCommandShellDialect?: "powershell" | "cmd" | "posix"
   /** Bash only: host default 60000; accepted override 1000..21600000. */
   timeoutMs?: number
+  /** Isolated `Write`/`Edit` delegate chain id; re-roots the call to that
+   * delegate's worktree (ADR 0326). Omitted for every other call. */
+  delegationId?: string
 }
 ```
 
@@ -1176,6 +1213,7 @@ numeric slot; the string is the contract, the number is transport detail.
 | 1022 | PLUGIN_MARKET_NOT_FOUND | the platform does not have that plugin or version |
 | 1023 | PLUGIN_MARKET_RATE_LIMITED | the download endpoint asked the client to wait |
 | 1024 | PLUGIN_MARKET_NO_SOURCE | no distribution target can serve the package |
+| 1025 | WORKTREE_* | every isolated-session worktree failure (`WORKTREE_NOT_GIT`, `WORKTREE_CONFLICT`, `WORKTREE_PROJECT_DIRTY`, `WORKTREE_MISSING`, …) shares this slot; the string code distinguishes them |
 | -32029 | HOST_OVERLOADED | RPC dispatcher capacity exhausted |
 | -32601 | — | unknown method |
 | -32700 | — | unparseable request line |

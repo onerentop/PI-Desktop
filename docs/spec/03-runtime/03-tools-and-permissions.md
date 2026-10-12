@@ -364,6 +364,30 @@ Serialization also protects the snapshot store, which both producers and `Edit`
 mutate: without the per-session permit, a concurrent record could land between a
 validation and its write.
 
+## 4e. Isolated session worktrees (ADR 0326)
+
+A session created with `isolated: true` in a git project owns a dedicated
+worktree at `<data_dir>/worktrees/<project-key>/<id>` on branch
+`pi-desktop/<id>`, created from the project's current `HEAD` (uncommitted
+project changes are not copied; git-ignored files listed in
+`.worktreeinclude` are, without following links). For such a session:
+
+- the worktree replaces the project path as `workspaceRoot` for every rule in
+  §4–§5, so file tools, Bash's working directory, review snapshots, and
+  artifacts resolve inside it; it never falls back to the main checkout
+  (a missing worktree fails with a `WORKTREE_*` error);
+- `AGENTS.md` instructions are read from the worktree, while project identity
+  (memory, skills, plugins, MCP, subagents) stays keyed to the project path;
+- Bash receives `PI_PORT` (first port of a 10-port block in 41000–48999),
+  `PI_PROJECT_ROOT`, and `PI_WORKTREE_ROOT`;
+- git hooks and fsmonitor are disabled for host-run git commands in the
+  worktree, and removal never follows links out of it.
+
+Merging into the project is an explicit user action (preview, then merge with
+the preview token); it syncs the project branch into the worktree and only
+fast-forwards the project, so conflicts stay in the worktree. Deleting an
+isolated session discards its worktree and branch.
+
 ## 5. Bash Rules
 
 Host execution baseline:
@@ -638,6 +662,16 @@ card can say which delegate wants the call (see `04-ux/03-permission-ux.md`
 Session-scoped `allow-session` grants are still per `toolName` and per session:
 one delegate's approval of `Bash` applies to the whole session, including the
 parent and other delegates.
+
+Inside an isolated session (§4e), a delegate whose tools include `Write` or
+`Edit` runs in its own worktree, branched from the session worktree after the
+session's pending edits are checkpointed; its `tools.execute` calls carry the
+delegation chain id as `delegationId`, which re-roots path rules and Bash to
+that worktree. A completed run is merged back with the same algorithm as
+"Merge into project"; a conflict, failure, or stop keeps the delegate branch
+and the report tells the parent to resume it. Read-only and Bash-only
+delegates, and every delegate of a non-isolated session, share the owning
+session's root unchanged.
 
 ## 11. Plugin Tools
 

@@ -9380,6 +9380,31 @@ Follow the [current S3 acceptance scenario](/spec/06-delivery/04-e2e-test-plan#e
   session IPC contract tests, and real-model desktop acceptance. A local model
   fixture or mocked component result is not real-model acceptance evidence.
 
+### E2E-WORKTREE-isolated-session-lifecycle
+
+- **前置条件：** 隔离的桌面配置和数据目录、git 2.29+、一个处于分支上且至少有一次提交的
+  git 项目、已配置的模型，以及可选的 `.worktreeinclude`（列出一个被忽略的文件）。
+- **步骤：** 从项目菜单创建两个隔离会话，同时在两者中运行修改文件的提示。运行打印
+  `PI_PORT` / `PI_WORKTREE_ROOT` 的 Bash 命令。把第一个会话合并到项目；在项目和第二个
+  会话中修改同一行，再合并第二个会话。在第二个会话中解决冲突后再次合并。在一个隔离会话
+  中并行启动两个写文件的子代理。最后删除一个含未合并工作的隔离会话，并在会话存在时重启
+  一次应用。
+- **预期：** 每个会话的修改只落在自己的 worktree 中；在合并前项目检出和 `git status`
+  保持干净，每个 worktree 中都有被 include 的忽略文件。两个会话获得不同端口。第一次合并
+  快进项目，成功提示中给出分支名。冲突的合并会列出文件、不改动项目，并把该行标为
+  `Conflict`；解决后合并成功。写文件的子代理在各自的 worktree 中编辑，完成的运行合回会话。
+  删除时提示未合并工作将丢失，并删除 worktree 文件夹和 `pi-desktop/<id>` 分支，不触碰其中
+  链接指向的文件。重启后会话在其 worktree 中重新打开；被手动删除的 worktree 显示
+  `Folder missing`，且绝不回退到项目目录。
+- **Windows 检查：** 含目录 junction 的 worktree 删除时不跟随 junction；超过 260 字符的深
+  路径能创建和删除；worktree 中有文件被锁定时删除会明确失败并可重试。
+- **关联规范：** `03-runtime/03-tools-and-permissions.md` §4e、§10.2；
+  `03-runtime/06-host-rpc-protocol.md`；`04-ux/01-ui-ia.md` §3.2；ADR 0326。
+- **覆盖：** host-core `session_worktrees` 测试（创建、合并、冲突、删除、链接安全、启动
+  对账、子代理）、worktree IPC 契约测试、渲染层 `worktree-ui` 测试和 agent-runtime 子代理
+  测试。Windows 检查需要 Windows 主机。
+- **状态：** Documented
+
 ### E2E-HOOKS-cancel-and-dispose
 
 - **#816 扩展验收：** 命令弹窗显示期间 Stop，真实渲染层移除弹窗，后续弹窗和 exec
