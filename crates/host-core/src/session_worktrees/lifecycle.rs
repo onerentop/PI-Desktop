@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 
 use super::git::GitRunner;
 use super::include::{copy_included, IncludeReport};
-use super::merge::{self, MergeOutcome, MergePreview};
+use super::merge::{self, MergeOutcome, MergePreview, SyncOutcome};
 use super::probe::{probe, BRANCH_NAMESPACE};
 use super::registry::{self, NewWorktree, SetupStatus, WorktreeRow, WorktreeStatus};
 use super::remove::remove_worktree;
@@ -557,6 +557,41 @@ pub async fn merge_session(
         let st = state.lock().await;
         registry::set_status(&st.db, &target.row.id, status)?;
     }
+    result
+}
+
+/// How many project commits "Sync from project" would bring in; for the
+/// session menu.
+pub async fn behind_session(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> Result<u64, WorktreeError> {
+    let target = merge_target(state, session_id).await?;
+    merge::commits_behind(git, &target.row).await
+}
+
+/// "Sync from project" (ADR 0326): merge the project's branch into the
+/// session's worktree so the session continues on current code. The project
+/// checkout is never touched; a conflict stays in the worktree and marks the
+/// session, exactly like a merge into the project.
+pub async fn sync_session(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> Result<SyncOutcome, WorktreeError> {
+    let target = merge_target(state, session_id).await?;
+    ensure_idle(&state.lock().await.db, session_id)?;
+    let _guard = repo_lock::lock(Path::new(&target.row.common_dir)).await;
+    let result =
+        merge::sync_from_owner(git, &target.row, &merge::commit_message(&target.title)).await;
+    let status = match &result {
+        Ok(_) => WorktreeStatus::Active,
+        Err(error) if error.code == "WORKTREE_CONFLICT" => WorktreeStatus::Conflict,
+        Err(_) => return result,
+    };
+    let st = state.lock().await;
+    registry::set_status(&st.db, &target.row.id, status)?;
     result
 }
 

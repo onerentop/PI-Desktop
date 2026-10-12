@@ -1,7 +1,14 @@
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionWorktreeSummary, WorktreePendingWork } from "@pi-desktop/shared";
-import { IconBranch, IconFileText, IconFolderOpen, IconPullRequest, IconWrench } from "../../components/icons";
+import {
+  IconBranch,
+  IconFileText,
+  IconFolderOpen,
+  IconPullRequest,
+  IconRefresh,
+  IconWrench,
+} from "../../components/icons";
 import { Badge } from "../../components/ui";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
@@ -11,6 +18,7 @@ import {
   createIsolatedSession,
   isolationAvailability,
   type IsolationProbeState,
+  syncIsolatedSession,
   worktreeErrorMessage,
 } from "./worktree-actions";
 import { useWorktreeUi } from "./worktree-ui-store";
@@ -121,6 +129,22 @@ export function WorktreeSessionMenuItems({
 }) {
   const { t } = useTranslation();
   const open = useWorktreeUi((s) => s.open);
+  const syncable = Boolean(worktree) && worktree?.status !== "missing";
+  // Project commits the session lacks, counted when the menu opens; `-1`
+  // when the count failed (syncing still reports the reason).
+  const [behind, setBehind] = useState<number | null>(null);
+  useEffect(() => {
+    if (!syncable) return;
+    let current = true;
+    setBehind(null);
+    api
+      .getWorktreeBehind(sessionId)
+      .then((count) => current && setBehind(count))
+      .catch(() => current && setBehind(-1));
+    return () => {
+      current = false;
+    };
+  }, [sessionId, syncable]);
   if (!worktree) return null;
   const missing = worktree.status === "missing";
   return (
@@ -137,6 +161,23 @@ export function WorktreeSessionMenuItems({
       >
         <IconPullRequest size={14} />
         {t("worktree.merge.menu")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        data-action="worktree-sync"
+        disabled={running || missing || behind === null || behind === 0}
+        aria-busy={behind === null && !missing ? true : undefined}
+        title={behind === 0 ? t("worktree.sync.upToDate") : undefined}
+        onClick={() => {
+          onDone();
+          void syncIsolatedSession(sessionId, t);
+        }}
+      >
+        <IconRefresh size={14} />
+        {behind !== null && behind > 0
+          ? t("worktree.sync.menuBehind", { count: behind })
+          : t("worktree.sync.menu")}
       </button>
       <button
         type="button"

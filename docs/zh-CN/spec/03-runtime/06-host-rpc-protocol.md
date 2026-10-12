@@ -423,6 +423,10 @@ off | minimal | low | medium | high | xhigh | max
 - `worktree.merge({ sessionId, previewToken })` → `{ outcome }`。令牌过期为
   `WORKTREE_CHANGED_SINCE_PREVIEW`；项目有未提交改动为 `WORKTREE_PROJECT_DIRTY`；冲突为
   `WORKTREE_CONFLICT`，worktree 保持冲突状态，项目不受影响。
+- `worktree.behind({ sessionId })` → `{ commits }`，即会话尚未包含的项目分支提交数。
+- `worktree.sync({ sessionId })` → `{ outcome }`（`synced` 及 `commits`，或 `upToDate`）：
+  “从项目同步”先提交会话中待提交的工作，再把项目分支合入会话 worktree。不改动项目检出；
+  冲突为 `WORKTREE_CONFLICT`，留在 worktree 中，并像合并冲突一样标记会话。
 - `worktree.pendingWork({ sessionId })` → `{ pending }`，即删除会丢弃的未合并工作。
 - `worktree.setupLog({ sessionId })` → `{ setupStatus, log }`。
 - `worktree.location({ sessionId })` → `{ path }`；仅供 Electron Main 的“在文件夹中显示”

@@ -133,6 +133,9 @@ test("only isolated sessions get worktree menu items, disabled while running or 
   assert.doesNotMatch(idle, /data-action="worktree-merge"[^>]*disabled/);
   assert.match(idle, /data-action="worktree-reveal"/);
   assert.match(idle, /data-action="worktree-setup-log"/);
+  // "Sync from project" waits for the behind count before it can be used.
+  assert.match(idle, /data-action="worktree-sync"[^>]*disabled/);
+  assert.ok(idle.includes(en.sync.menu));
 
   const running = wrap(
     createElement(WorktreeSessionMenuItems, {
@@ -252,4 +255,40 @@ test("the delete loss note stays empty until unmerged work is known", () => {
   // Before the pending-work answer arrives only the ordinary armed label shows.
   assert.equal(wrap(createElement(WorktreeDeleteLossNote, { sessionId: "s1" })), "");
   assert.ok(en.deleteLoss.length > 0);
+});
+
+test("syncing from the project reports new commits, an up-to-date session, and conflicts", async () => {
+  const { syncIsolatedSession } = modules.actions;
+  const { useAppStore } = modules.store;
+  const t = i18n.t.bind(i18n);
+  const toasts = [];
+  let refreshed = 0;
+  useAppStore.setState({
+    showToast: (message, options) => toasts.push({ message, variant: options?.variant }),
+    refreshSessions: async () => {
+      refreshed += 1;
+    },
+  });
+
+  stubBridge({ [IPC.invoke.worktreeSync]: () => ({ result: "synced", commits: 3 }) });
+  await syncIsolatedSession("s1", t);
+  stubBridge({ [IPC.invoke.worktreeSync]: () => ({ result: "upToDate" }) });
+  await syncIsolatedSession("s1", t);
+  stubBridge({
+    [IPC.invoke.worktreeSync]: () => {
+      throw Object.assign(new Error("merge conflict"), {
+        code: "WORKTREE_CONFLICT",
+        details: { errorCode: "WORKTREE_CONFLICT", files: ["f.txt", "g.txt"] },
+      });
+    },
+  });
+  await syncIsolatedSession("s1", t);
+
+  assert.deepEqual(toasts, [
+    { message: i18n.t("worktree.sync.success", { count: 3 }), variant: "success" },
+    { message: en.sync.upToDate, variant: "info" },
+    { message: `${en.sync.conflict} f.txt, g.txt`, variant: "error" },
+  ]);
+  // The badge follows: the list is refreshed after every attempt.
+  assert.equal(refreshed, 3);
 });

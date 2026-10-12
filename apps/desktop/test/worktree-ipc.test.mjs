@@ -94,3 +94,19 @@ test("missing identifiers and non-string setup commands are rejected before the 
     { projectPath: "/p", command: null },
   ]);
 });
+
+test("sync from project forwards the session and unwraps the count and outcome", async () => {
+  const { invoke, calls } = setup({
+    "worktree.behind": { commits: 2 },
+    "worktree.sync": { outcome: { result: "synced", commits: 2 } },
+  });
+  assert.equal(await invoke(IPC.invoke.worktreeBehind, { sessionId: "s1" }), 2);
+  assert.deepEqual(await invoke(IPC.invoke.worktreeSync, { sessionId: " s1 " }), {
+    result: "synced",
+    commits: 2,
+  });
+  assert.deepEqual(calls, [
+    { method: "worktree.behind", params: { sessionId: "s1" } },
+    { method: "worktree.sync", params: { sessionId: "s1" } },
+  ]);
+});

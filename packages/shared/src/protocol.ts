@@ -141,6 +141,9 @@ export const IPC = {
     worktreePreview: "pi-desktop/worktree/preview",
     worktreeMerge: "pi-desktop/worktree/merge",
     worktreePendingWork: "pi-desktop/worktree/pendingWork",
+    /** "Sync from project": project commits the session lacks, and the sync. */
+    worktreeBehind: "pi-desktop/worktree/behind",
+    worktreeSync: "pi-desktop/worktree/sync",
     worktreeSetupLog: "pi-desktop/worktree/setupLog",
     /** Opens the worktree folder in the OS file manager; no path is returned. */
     worktreeReveal: "pi-desktop/worktree/reveal",

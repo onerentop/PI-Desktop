@@ -28,6 +28,13 @@ export const zhTW = {
       nothing: "沒有需要合併的內容。",
       conflict: "以下檔案與專案衝突。請在工作階段中解決後再次合併：",
     },
+    sync: {
+      menu: "從專案同步",
+      menuBehind: "從專案同步（{{count}} 個新提交）",
+      upToDate: "工作階段已包含專案的最新程式碼。",
+      success: "已把專案的 {{count}} 個新提交同步到工作階段。",
+      conflict: "這些檔案與專案衝突，請在工作階段中解決：",
+    },
     setupCommand: {
       menu: "Worktree 初始化指令…",
       title: "Worktree 初始化指令",

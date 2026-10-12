@@ -257,6 +257,48 @@ pub async fn commits_ahead(git: &GitRunner, row: &WorktreeRow) -> Result<u64, Wo
     Ok(count.trim().parse().unwrap_or(0))
 }
 
+/// Commits on `row`'s owner branch that its branch does not have yet, that
+/// is, what "Sync from project" would bring in.
+pub async fn commits_behind(git: &GitRunner, row: &WorktreeRow) -> Result<u64, WorktreeError> {
+    let range = format!("{}..{}", head_ref(&row.branch), head_ref(&row.owner_branch));
+    let count = git
+        .run(Path::new(&row.path), &["rev-list", "--count", &range])
+        .await?;
+    Ok(count.trim().parse().unwrap_or(0))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "result")]
+pub enum SyncOutcome {
+    /// The owner branch's new commits are now on the session branch.
+    Synced {
+        commits: u64,
+    },
+    UpToDate,
+}
+
+/// "Sync from project": bring the owner branch's new commits into `row`'s
+/// branch without touching the owner checkout. Uncommitted session work is
+/// committed with `message` first; a conflict stays in the worktree, and an
+/// unfinished resolution is concluded first (the same rules as `land`).
+pub async fn sync_from_owner(
+    git: &GitRunner,
+    row: &WorktreeRow,
+    message: &str,
+) -> Result<SyncOutcome, WorktreeError> {
+    let worktree = Path::new(&row.path);
+    if merge_in_progress(git, worktree).await? {
+        conclude_resolved_merge(git, worktree).await?;
+    }
+    let behind = commits_behind(git, row).await?;
+    if behind == 0 {
+        return Ok(SyncOutcome::UpToDate);
+    }
+    commit_all(git, worktree, message).await?;
+    sync_owner_into_session(git, worktree, &row.owner_branch).await?;
+    Ok(SyncOutcome::Synced { commits: behind })
+}
+
 /// Merge the owner branch into the session branch inside the worktree. A
 /// conflict stays in the worktree and is reported with its files.
 async fn sync_owner_into_session(

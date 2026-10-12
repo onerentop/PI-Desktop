@@ -28,6 +28,13 @@ export const tr = {
       nothing: "Birleştirilecek bir şey yok.",
       conflict: "Bu dosyalar projeyle çakışıyor. Oturumda çözün, ardından yeniden birleştirin:",
     },
+    sync: {
+      menu: "Projeden eşitle",
+      menuBehind: "Projeden eşitle ({{count}} yeni)",
+      upToDate: "Oturum zaten projenin en güncel koduna sahip.",
+      success: "Projeden {{count}} yeni commit oturuma alındı.",
+      conflict: "Bu dosyalar projeyle çakışıyor. Bunları oturumda çözün:",
+    },
     setupCommand: {
       menu: "Worktree hazırlık komutu…",
       title: "Worktree hazırlık komutu",

@@ -1417,6 +1417,8 @@ Thin forwards to the host `worktree.*` methods
 - `worktree/probe({ projectPath })` → whether the project can host isolated
   sessions, with the refusal code, or whether it has uncommitted changes
 - `worktree/preview({ sessionId })` / `worktree/merge({ sessionId, previewToken })`
+- `worktree/behind({ sessionId })` → commit count, and
+  `worktree/sync({ sessionId })` — "Sync from project"
 - `worktree/pendingWork({ sessionId })` — unmerged work a delete discards
 - `worktree/setupLog({ sessionId })`
 - `worktree/reveal({ sessionId })` — Electron Main resolves the folder with

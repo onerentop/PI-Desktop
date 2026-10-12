@@ -81,6 +81,11 @@ export type WorktreeMergeOutcome =
   | { result: "merged"; commits: number; files: number }
   | { result: "nothingToMerge" };
 
+/** `worktree.sync`: "Sync from project" brings the project's new commits in. */
+export type WorktreeSyncOutcome =
+  | { result: "synced"; commits: number }
+  | { result: "upToDate" };
+
 /** `worktree.pendingWork`: what deleting the session would lose. */
 export type WorktreePendingWork = {
   unmergedCommits: number;

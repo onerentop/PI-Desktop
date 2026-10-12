@@ -328,3 +328,55 @@ async fn resolving_a_conflict_through_a_tool_call_clears_the_badge() {
         "active"
     );
 }
+
+/// `worktree.behind` and `worktree.sync` through the RPC entry point.
+#[tokio::test]
+async fn sync_from_project_through_rpc() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_repo(&dir.path().join("project"));
+    fs::write(project.join("f.txt"), "base\n").unwrap();
+    git_cmd(&project, &["add", "f.txt"]);
+    git_cmd(&project, &["commit", "-q", "-m", "f"]);
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let mut app = AppState::open(&data).unwrap();
+    app.handshook = true;
+    let state = Arc::new(Mutex::new(app));
+    let created = call(
+        &state,
+        "session.create",
+        json!({ "projectPath": project.to_string_lossy(), "isolated": true }),
+    )
+    .await
+    .unwrap();
+    let session_id = created["session"]["id"].as_str().unwrap().to_string();
+    assert_eq!(behind(&state, &session_id).await, 0);
+    fs::write(project.join("g.txt"), "new\n").unwrap();
+    git_cmd(&project, &["add", "g.txt"]);
+    git_cmd(&project, &["commit", "-q", "-m", "g"]);
+    assert_eq!(behind(&state, &session_id).await, 1);
+
+    let synced = call(&state, "worktree.sync", json!({ "sessionId": session_id }))
+        .await
+        .unwrap();
+    assert_eq!(
+        synced["outcome"],
+        json!({ "result": "synced", "commits": 1 })
+    );
+    let root = {
+        let st = state.lock().await;
+        PathBuf::from(resolve_tool_workspace(&st, &session_id).unwrap().unwrap())
+    };
+    assert_eq!(fs::read_to_string(root.join("g.txt")).unwrap(), "new\n");
+    let again = call(&state, "worktree.sync", json!({ "sessionId": session_id }))
+        .await
+        .unwrap();
+    assert_eq!(again["outcome"], json!({ "result": "upToDate" }));
+}
+
+async fn behind(state: &Arc<Mutex<AppState>>, session_id: &str) -> Value {
+    call(state, "worktree.behind", json!({ "sessionId": session_id }))
+        .await
+        .unwrap()["commits"]
+        .clone()
+}

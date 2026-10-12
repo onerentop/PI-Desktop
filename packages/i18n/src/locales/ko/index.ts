@@ -28,6 +28,13 @@ export const ko = {
       nothing: "병합할 내용이 없습니다.",
       conflict: "다음 파일이 프로젝트와 충돌합니다. 세션에서 해결한 뒤 다시 병합하세요:",
     },
+    sync: {
+      menu: "프로젝트에서 동기화",
+      menuBehind: "프로젝트에서 동기화 (새 커밋 {{count}}개)",
+      upToDate: "세션에 이미 프로젝트의 최신 코드가 있습니다.",
+      success: "프로젝트의 새 커밋 {{count}}개를 세션에 가져왔습니다.",
+      conflict: "이 파일들이 프로젝트와 충돌합니다. 세션에서 해결하세요:",
+    },
     setupCommand: {
       menu: "Worktree 설정 명령…",
       title: "Worktree 설정 명령",

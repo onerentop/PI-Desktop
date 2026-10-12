@@ -80,6 +80,22 @@ pub(super) async fn handle(
                 .map_err(to_rpc)?;
             Ok(json!({ "outcome": outcome }))
         }
+        // "Sync from project": `behind` sizes the menu item, `sync` merges
+        // the project's branch into the session worktree.
+        "worktree.behind" => {
+            let session_id = str_param(&params, "sessionId")?;
+            let commits = lifecycle::behind_session(state, &git, session_id)
+                .await
+                .map_err(to_rpc)?;
+            Ok(json!({ "commits": commits }))
+        }
+        "worktree.sync" => {
+            let session_id = str_param(&params, "sessionId")?;
+            let outcome = lifecycle::sync_session(state, &git, session_id)
+                .await
+                .map_err(to_rpc)?;
+            Ok(json!({ "outcome": outcome }))
+        }
         "worktree.pendingWork" => {
             let session_id = str_param(&params, "sessionId")?;
             let pending = lifecycle::pending_work(state, &git, session_id)

@@ -28,6 +28,13 @@ export const ptBR = {
       nothing: "Não há nada para mesclar.",
       conflict: "Estes arquivos entram em conflito com o projeto. Resolva-os na sessão e mescle novamente:",
     },
+    sync: {
+      menu: "Sincronizar do projeto",
+      menuBehind: "Sincronizar do projeto ({{count}} novos)",
+      upToDate: "A sessão já tem o código mais recente do projeto.",
+      success: "{{count}} commit(s) novo(s) do projeto trazido(s) para a sessão.",
+      conflict: "Estes arquivos conflitam com o projeto. Resolva-os na sessão:",
+    },
     setupCommand: {
       menu: "Comando de preparação do worktree…",
       title: "Comando de preparação do worktree",

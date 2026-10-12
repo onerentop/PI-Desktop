@@ -502,3 +502,95 @@ async fn the_conflict_badge_clears_when_the_conflict_is_resolved() {
     refresh_conflict_status(&env.state, &env.git, &session).await;
     assert_eq!(status(&env), WorktreeStatus::Active);
 }
+
+/// The user's scenario: session 1 merges, session 2 merges after resolving a
+/// conflict with it. "Sync from project" brings that resolution into session
+/// 1, so its later edits on the same line merge without a repeat conflict.
+#[tokio::test]
+async fn syncing_brings_another_sessions_resolution_into_the_session() {
+    let env = env();
+    let (one, _c1, root1) = isolated(&env).await;
+    let (two, _c2, root2) = isolated(&env).await;
+    let merge_now = |session: String| {
+        let env = &env;
+        async move {
+            let token = preview_session(&env.state, &env.git, &session)
+                .await
+                .unwrap()
+                .preview_token;
+            merge_session(&env.state, &env.git, &session, &token).await
+        }
+    };
+    fs::write(root1.join("f.txt"), "A\n").unwrap();
+    merge_now(one.clone()).await.unwrap();
+    fs::write(root2.join("f.txt"), "B\n").unwrap();
+    assert_eq!(
+        merge_now(two.clone()).await.unwrap_err().code,
+        "WORKTREE_CONFLICT"
+    );
+    fs::write(root2.join("f.txt"), "AB\n").unwrap();
+    merge_now(two.clone()).await.unwrap();
+
+    // Session 1 still has its old code and knows it is behind.
+    assert_eq!(fs::read_to_string(root1.join("f.txt")).unwrap(), "A\n");
+    assert!(behind_session(&env.state, &env.git, &one).await.unwrap() > 0);
+    let synced = sync_session(&env.state, &env.git, &one).await.unwrap();
+    assert!(matches!(synced, SyncOutcome::Synced { .. }));
+    assert_eq!(fs::read_to_string(root1.join("f.txt")).unwrap(), "AB\n");
+    assert_eq!(behind_session(&env.state, &env.git, &one).await.unwrap(), 0);
+    assert_eq!(
+        sync_session(&env.state, &env.git, &one).await.unwrap(),
+        SyncOutcome::UpToDate
+    );
+    // Syncing never touches the project.
+    assert_eq!(git_cmd(&env.project, &["status", "--porcelain"]), "");
+
+    fs::write(root1.join("f.txt"), "AB2\n").unwrap();
+    assert!(matches!(
+        merge_now(one.clone()).await.unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+    assert_eq!(
+        fs::read_to_string(env.project.join("f.txt")).unwrap(),
+        "AB2\n"
+    );
+}
+
+/// A sync conflict stays in the session worktree, marks the session, and
+/// leaves the project untouched; resolving it clears the mark.
+#[tokio::test]
+async fn a_sync_conflict_stays_in_the_session() {
+    let env = env();
+    let (session, _created, root) = isolated(&env).await;
+    fs::write(env.project.join("f.txt"), "project\n").unwrap();
+    git_cmd(&env.project, &["commit", "-q", "-am", "project"]);
+    fs::write(root.join("f.txt"), "session\n").unwrap();
+
+    let error = sync_session(&env.state, &env.git, &session)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "WORKTREE_CONFLICT");
+    assert_eq!(error.files, vec!["f.txt"]);
+    let status = |env: &Env| {
+        let st = env.state.try_lock().unwrap();
+        registry::for_owner(&st.db, &session, None)
+            .unwrap()
+            .unwrap()
+            .status
+    };
+    assert_eq!(status(&env), WorktreeStatus::Conflict);
+    assert_eq!(
+        fs::read_to_string(env.project.join("f.txt")).unwrap(),
+        "project\n"
+    );
+    assert_eq!(git_cmd(&env.project, &["status", "--porcelain"]), "");
+
+    fs::write(root.join("f.txt"), "both\n").unwrap();
+    // Sync again concludes the resolution; nothing else is behind.
+    assert_eq!(
+        sync_session(&env.state, &env.git, &session).await.unwrap(),
+        SyncOutcome::UpToDate
+    );
+    assert_eq!(status(&env), WorktreeStatus::Active);
+    assert_eq!(fs::read_to_string(root.join("f.txt")).unwrap(), "both\n");
+}

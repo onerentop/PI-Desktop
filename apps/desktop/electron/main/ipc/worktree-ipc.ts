@@ -65,6 +65,20 @@ export function registerWorktreeIpc({
     return result.outcome;
   });
 
+  registrar.handle(IPC.invoke.worktreeBehind, async (input: unknown) => {
+    const result = await host().call<{ commits: number }>("worktree.behind", {
+      sessionId: requiredText(input, "sessionId"),
+    });
+    return result.commits;
+  });
+
+  registrar.handle(IPC.invoke.worktreeSync, async (input: unknown) => {
+    const sessionId = requiredText(input, "sessionId");
+    const result = await host().call<{ outcome: unknown }>("worktree.sync", { sessionId });
+    logger.app("session", "info", "isolated session synced from project", { sessionId });
+    return result.outcome;
+  });
+
   registrar.handle(IPC.invoke.worktreePendingWork, async (input: unknown) => {
     const result = await host().call<{ pending: unknown }>("worktree.pendingWork", {
       sessionId: requiredText(input, "sessionId"),

@@ -28,6 +28,13 @@ export const zhCN = {
       nothing: "没有需要合并的内容。",
       conflict: "以下文件与项目冲突。请在会话中解决后再次合并：",
     },
+    sync: {
+      menu: "从项目同步",
+      menuBehind: "从项目同步（{{count}} 个新提交）",
+      upToDate: "会话已包含项目的最新代码。",
+      success: "已把项目的 {{count}} 个新提交同步到会话。",
+      conflict: "这些文件与项目冲突，请在会话中解决：",
+    },
     setupCommand: {
       menu: "Worktree 初始化命令…",
       title: "Worktree 初始化命令",

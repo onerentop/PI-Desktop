@@ -349,7 +349,8 @@
   file-editing prompt in each at the same time. Run a Bash command that prints
   `PI_PORT` / `PI_WORKTREE_ROOT`. Merge the first session into the project;
   edit the same line in the project and in the second session, then merge the
-  second. Resolve the conflict in the second session and merge again. In one
+  second. Resolve the conflict in the second session and merge again, then
+  use **Sync from project** in the first session. In one
   isolated session, start two writing subagents in parallel. Finally delete
   an isolated session with unmerged work, and restart the app once while a
   session exists. Open the menu of a non-git project.
@@ -358,7 +359,9 @@
   file is present in each worktree. The two sessions get distinct ports. The
   first merge fast-forwards the project and a success toast names the branch.
   The conflicting merge lists the files, leaves the project untouched, and
-  marks the row `Conflict`; after resolution the merge lands. Writing
+  marks the row `Conflict`; after resolution the badge clears and the merge
+  lands. Sync from project shows the new commits and brings the resolution
+  into the first session without touching the project. Writing
   subagents edit in separate worktrees and completed runs merge back into the
   session. Delete warns about unmerged work and removes the worktree folder
   and `pi-desktop/<id>` branch without touching files linked from it. After

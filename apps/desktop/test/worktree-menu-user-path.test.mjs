@@ -20,7 +20,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
 import { IPC } from "@pi-desktop/shared";
-import { WorktreeProjectMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
+import { WorktreeProjectMenuItems, WorktreeSessionMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
 import { WorktreeMergeDialog } from "../../apps/desktop/src/features/worktree/WorktreeMergeDialog";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
@@ -33,8 +33,15 @@ const probes = {
   "/repo": { available: true, uncommittedChanges: false },
 };
 const pending = [];
+const behind = { stale: 2, current: 0 };
+const synced = [];
 window.piDesktop = { platform: "linux", on() { return () => {}; },
   invoke(channel, payload) {
+    if (channel === IPC.invoke.worktreeBehind) return Promise.resolve({ ok: true, data: behind[payload.sessionId] });
+    if (channel === IPC.invoke.worktreeSync) {
+      synced.push(payload.sessionId);
+      return Promise.resolve({ ok: true, data: { result: "synced", commits: behind[payload.sessionId] } });
+    }
     if (channel === IPC.invoke.worktreePreview) {
       return Promise.resolve({ ok: true, data: { branch: "pi-desktop/s1", ownerBranch: "main",
         commits: [{ sha: "abc", subject: "edit f" }], files: [{ status: "M", path: "f.txt", uncommitted: false }],
@@ -48,6 +55,7 @@ const toasts = [];
 useAppStore.setState({
   newSession: async (options) => { created.push(options); },
   showToast: (message) => { toasts.push(message); },
+  refreshSessions: async () => {},
 });
 const frame = () => new Promise(requestAnimationFrame);
 async function settle() { await frame(); await frame(); }
@@ -96,6 +104,26 @@ window.menuProbe = async () => {
   check(confirm && !confirm.disabled, "merge preview stuck loading under StrictMode");
   check(document.body.textContent.includes("f.txt"), "preview files not shown");
   flushSync(() => dialogRoot.unmount());
+
+  // "Sync from project" shows how far behind the session is and syncs it.
+  const menuRoot = createRoot(document.getElementById("root"));
+  const sessionMenu = (sessionId) => flushSync(() => menuRoot.render(React.createElement(React.StrictMode, null,
+    React.createElement(WorktreeSessionMenuItems, { sessionId, title: "Task", running: false, onDone() {},
+      worktree: { branch: "pi-desktop/" + sessionId, status: "active", setupStatus: "none" } }))));
+  const syncItem = () => document.querySelector('[data-action="worktree-sync"]');
+  sessionMenu("current");
+  await settle();
+  check(syncItem().disabled, "an up-to-date session must not offer a sync");
+  sessionMenu("stale");
+  await settle();
+  check(!syncItem().disabled, "a session behind the project must offer a sync");
+  check(syncItem().textContent.includes(i18n.t("worktree.sync.menuBehind", { count: 2 })), "missing behind count");
+  toasts.length = 0;
+  syncItem().click();
+  await settle();
+  check(JSON.stringify(synced) === JSON.stringify(["stale"]), "sync not requested: " + JSON.stringify(synced));
+  check(toasts[0] === i18n.t("worktree.sync.success", { count: 2 }), "missing sync toast: " + JSON.stringify(toasts));
+  flushSync(() => menuRoot.unmount());
   return { passed: true };
 };
 `;

@@ -28,6 +28,13 @@ export const de = {
       "nothing": "Es gibt nichts zusammenzuführen.",
       "conflict": "Diese Dateien stehen im Konflikt mit dem Projekt. Löse sie in der Sitzung und führe dann erneut zusammen:",
     },
+    "sync": {
+      "menu": "Aus Projekt synchronisieren",
+      "menuBehind": "Aus Projekt synchronisieren ({{count}} neu)",
+      "upToDate": "Die Sitzung hat bereits den neuesten Projektstand.",
+      "success": "{{count}} neue Projekt-Commit(s) in die Sitzung übernommen.",
+      "conflict": "Diese Dateien stehen im Konflikt mit dem Projekt. Löse sie in der Sitzung:",
+    },
     "setupCommand": {
       "menu": "Worktree-Einrichtungsbefehl…",
       "title": "Worktree-Einrichtungsbefehl",

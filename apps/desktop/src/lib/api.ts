@@ -92,6 +92,7 @@ import type {
   WorktreeMergeOutcome,
   WorktreeMergePreview,
   WorktreePendingWork,
+  WorktreeSyncOutcome,
   WorktreeProbeResult,
   WorktreeSetupLog,
   SessionCollaborationSummary,
@@ -626,6 +627,10 @@ export const api = {
     invoke<WorktreeMergePreview>(IPC.invoke.worktreePreview, { sessionId }),
   mergeWorktree: (sessionId: string, previewToken: string) =>
     invoke<WorktreeMergeOutcome>(IPC.invoke.worktreeMerge, { sessionId, previewToken }),
+  getWorktreeBehind: (sessionId: string) =>
+    invoke<number>(IPC.invoke.worktreeBehind, { sessionId }),
+  syncWorktree: (sessionId: string) =>
+    invoke<WorktreeSyncOutcome>(IPC.invoke.worktreeSync, { sessionId }),
   getWorktreePendingWork: (sessionId: string) =>
     invoke<WorktreePendingWork>(IPC.invoke.worktreePendingWork, { sessionId }),
   getWorktreeSetupLog: (sessionId: string) =>

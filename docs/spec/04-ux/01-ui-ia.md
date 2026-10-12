@@ -243,7 +243,11 @@ destination, chat as the home surface, tools and permissions inline.
   (or `Conflict`, `Folder missing`, `Setup failed`) and adds **Merge into
   project…** (preview of commits and files, then merge; conflicting files are
   listed and stay in the session; the `Conflict` badge clears as soon as the
-  session resolves or abandons the conflict, and the next merge concludes it), **Show worktree folder**, and **Setup log**.
+  session resolves or abandons the conflict, and the next merge concludes it),
+  **Sync from project** (labelled with the number of new project commits
+  when the menu opens, disabled when there are none; it merges the project's
+  branch into the session so the session continues on current code, and a
+  conflict stays in the session like a merge conflict), **Show worktree folder**, and **Setup log**.
   Its delete confirmation states that unmerged work will be lost. Isolated
   sessions are never reused as the empty draft and cannot move to another
   project; forks are ordinary sessions.

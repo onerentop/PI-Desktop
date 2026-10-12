@@ -26,6 +26,13 @@ export const en = {
       nothing: "There is nothing to merge.",
       conflict: "These files conflict with the project. Resolve them in the session, then merge again:",
     },
+    sync: {
+      menu: "Sync from project",
+      menuBehind: "Sync from project ({{count}} new)",
+      upToDate: "The session already has the project's latest code.",
+      success: "Brought {{count}} new project commit(s) into the session.",
+      conflict: "These files conflict with the project. Resolve them in the session:",
+    },
     setupCommand: {
       menu: "Worktree setup command…",
       title: "Worktree setup command",

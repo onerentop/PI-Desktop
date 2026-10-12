@@ -616,6 +616,13 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
   is `WORKTREE_CHANGED_SINCE_PREVIEW`; a dirty project is
   `WORKTREE_PROJECT_DIRTY`; a conflict is `WORKTREE_CONFLICT` and leaves the
   worktree conflicted and the project untouched.
+- `worktree.behind({ sessionId })` → `{ commits }`, project-branch commits the
+  session does not have yet.
+- `worktree.sync({ sessionId })` → `{ outcome }` (`synced` with `commits`, or
+  `upToDate`): "Sync from project" merges the project branch into the session
+  worktree after committing pending session work. The project checkout is not
+  touched; a conflict is `WORKTREE_CONFLICT`, stays in the worktree, and marks
+  the session like a merge conflict.
 - `worktree.pendingWork({ sessionId })` → `{ pending }`, the unmerged work a
   delete would discard.
 - `worktree.setupLog({ sessionId })` → `{ setupStatus, log }`.

@@ -87,6 +87,32 @@ export function mergeFailureState(error: unknown, t: TFunction): MergeFailureSta
 }
 
 /**
+ * "Sync from project": bring the project's new commits into the session's
+ * worktree. A conflict stays in the session and is listed; the sidebar is
+ * refreshed either way so the badge follows.
+ */
+export async function syncIsolatedSession(sessionId: string, t: TFunction): Promise<void> {
+  const { showToast, refreshSessions } = useAppStore.getState();
+  try {
+    const outcome = await api.syncWorktree(sessionId);
+    if (outcome.result === "synced") {
+      showToast(t("worktree.sync.success", { count: outcome.commits }), { variant: "success" });
+    } else {
+      showToast(t("worktree.sync.upToDate"), { variant: "info" });
+    }
+  } catch (error) {
+    const files =
+      worktreeErrorCode(error) === WorktreeErrorCodes.CONFLICT ? worktreeConflictFiles(error) : [];
+    showToast(
+      files.length > 0 ? `${t("worktree.sync.conflict")} ${files.join(", ")}` : worktreeErrorMessage(error, t),
+      { variant: "error" },
+    );
+  } finally {
+    void refreshSessions();
+  }
+}
+
+/**
  * "New isolated session": check that the project can host a worktree, say so
  * when uncommitted project changes stay behind (PRD R2b), then create the
  * session. Failures are reported as toasts in the user's language.

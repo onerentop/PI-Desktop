@@ -256,6 +256,14 @@ try {
   record("merge-b-after-resolution", mergedB?.outcome?.result === "merged" && firstLine(join(project, "f.txt")) === "AB" &&
     read(join(project, "b.txt"))?.trim() === "from-b" && projectClean());
 
+  // 3b. Session A still has its pre-resolution code; "Sync from project"
+  // brings B's resolution in without touching the project.
+  const { commits: behindA } = await host.call("worktree.behind", { sessionId: a.sessionId });
+  const syncA = await host.call("worktree.sync", { sessionId: a.sessionId }, 120_000);
+  record("sync-brings-resolution-into-a",
+    behindA > 0 && syncA.outcome?.result === "synced" && firstLine(join(a.root, "f.txt")) === "AB" && projectClean(),
+    `behind=${behindA} A=${firstLine(join(a.root, "f.txt"))}`);
+
   // 4. Two writing subagents in parallel inside one isolated session.
   const c = await isolatedSession("Session C");
   await prompt(c,

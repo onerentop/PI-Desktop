@@ -28,6 +28,13 @@ export const fr = {
       "nothing": "Il n'y a rien à fusionner.",
       "conflict": "Ces fichiers sont en conflit avec le projet. Résolvez-les dans la session, puis fusionnez à nouveau :",
     },
+    "sync": {
+      "menu": "Synchroniser depuis le projet",
+      "menuBehind": "Synchroniser depuis le projet ({{count}} nouveaux)",
+      "upToDate": "La session contient déjà le code le plus récent du projet.",
+      "success": "{{count}} nouveau(x) commit(s) du projet intégré(s) à la session.",
+      "conflict": "Ces fichiers sont en conflit avec le projet. Résolvez-les dans la session :",
+    },
     "setupCommand": {
       "menu": "Commande de préparation du worktree…",
       "title": "Commande de préparation du worktree",

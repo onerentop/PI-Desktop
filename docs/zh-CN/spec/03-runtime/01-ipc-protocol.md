@@ -1122,6 +1122,7 @@ type ProjectRecord = {
 - `worktree/probe({ projectPath })` → 项目能否承载隔离会话（不能时给出拒绝代码），以及是否
   有未提交改动
 - `worktree/preview({ sessionId })` / `worktree/merge({ sessionId, previewToken })`
+- `worktree/behind({ sessionId })` → 提交数，以及 `worktree/sync({ sessionId })` — “从项目同步”
 - `worktree/pendingWork({ sessionId })` — 删除时会丢弃的未合并工作
 - `worktree/setupLog({ sessionId })`
 - `worktree/reveal({ sessionId })` — Electron Main 通过 `worktree.location` 解析文件夹并在
