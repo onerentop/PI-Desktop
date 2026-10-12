@@ -307,6 +307,16 @@ async fn conclude_resolved_merge(git: &GitRunner, worktree: &Path) -> Result<(),
     Ok(())
 }
 
+/// Whether every conflict of an unfinished merge in `worktree` is resolved,
+/// by the same rule `land` uses to conclude it (`resolved_by_edit`).
+pub async fn conflicts_resolved(git: &GitRunner, worktree: &Path) -> Result<bool, WorktreeError> {
+    let stages = conflict_stages(git, worktree).await?;
+    Ok(unmerged_files(git, worktree).await?.iter().all(|file| {
+        let file_stages = stages.get(file).map(Vec::as_slice).unwrap_or(&[]);
+        resolved_by_edit(worktree, file, file_stages)
+    }))
+}
+
 pub async fn unmerged_files(
     git: &GitRunner,
     worktree: &Path,

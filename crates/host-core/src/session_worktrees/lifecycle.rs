@@ -560,6 +560,42 @@ pub async fn merge_session(
     result
 }
 
+/// After the session's own Write/Edit/Bash call: clear a `conflict` badge
+/// once the agent resolved every conflict (the merge itself still concludes
+/// on "Merge into project") or abandoned the merge. Cheap for every other
+/// session: one registry read, no git. Failures only log; the badge then
+/// stays until the next merge attempt.
+pub async fn refresh_conflict_status(state: &SharedState, git: &GitRunner, session_id: &str) {
+    let row = match registry::for_owner(&state.lock().await.db, session_id, None) {
+        Ok(Some(row)) if row.status == WorktreeStatus::Conflict => row,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, "could not read the worktree registry");
+            return;
+        }
+    };
+    let root = Path::new(&row.path);
+    let settled = async {
+        Ok::<bool, WorktreeError>(
+            !merge::merge_in_progress(git, root).await?
+                || merge::conflicts_resolved(git, root).await?,
+        )
+    }
+    .await;
+    match settled {
+        Ok(true) => {
+            let st = state.lock().await;
+            if let Err(error) = registry::set_status(&st.db, &row.id, WorktreeStatus::Active) {
+                tracing::warn!(%error, "could not clear the worktree conflict status");
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(%error, path = %row.path, "could not check worktree conflicts")
+        }
+    }
+}
+
 // ---- remove -----------------------------------------------------------------
 
 /// Commits on `row`'s branch that its owner branch lacks. When the owner

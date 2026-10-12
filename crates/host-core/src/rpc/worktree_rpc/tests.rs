@@ -241,3 +241,90 @@ async fn an_isolated_session_is_not_created_for_a_project_without_git() {
         .unwrap();
     assert!(ordinary["session"].get("worktree").is_none());
 }
+
+/// Through `tools.execute`: an agent Write that resolves the last conflict
+/// clears the session's conflict badge in `session.list`.
+#[tokio::test]
+async fn resolving_a_conflict_through_a_tool_call_clears_the_badge() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_repo(&dir.path().join("project"));
+    fs::write(project.join("f.txt"), "base\n").unwrap();
+    git_cmd(&project, &["add", "f.txt"]);
+    git_cmd(&project, &["commit", "-q", "-m", "f"]);
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let mut app = AppState::open(&data).unwrap();
+    app.handshook = true;
+    let state = Arc::new(Mutex::new(app));
+    let project_text = project.to_string_lossy().into_owned();
+    call(
+        &state,
+        "settings.set",
+        json!({ "defaultPermissionMode": "auto" }),
+    )
+    .await
+    .unwrap();
+    let created = call(
+        &state,
+        "session.create",
+        json!({ "projectPath": project_text, "isolated": true, "mode": "agent" }),
+    )
+    .await
+    .unwrap();
+    let session_id = created["session"]["id"].as_str().unwrap().to_string();
+    let root = {
+        let st = state.lock().await;
+        PathBuf::from(resolve_tool_workspace(&st, &session_id).unwrap().unwrap())
+    };
+    fs::write(root.join("f.txt"), "session\n").unwrap();
+    fs::write(project.join("f.txt"), "project\n").unwrap();
+    git_cmd(&project, &["commit", "-q", "-am", "project"]);
+    let preview = call(
+        &state,
+        "worktree.preview",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    .unwrap();
+    let token = preview["preview"]["previewToken"].clone();
+    let refused = call(
+        &state,
+        "worktree.merge",
+        json!({ "sessionId": session_id, "previewToken": token }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused["errorCode"], "WORKTREE_CONFLICT");
+    let badge = |listed: &Value| {
+        listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == session_id.as_str())
+            .unwrap()["worktree"]["status"]
+            .clone()
+    };
+    assert_eq!(
+        badge(&call(&state, "session.list", json!({})).await.unwrap()),
+        "conflict"
+    );
+
+    let written = call(
+        &state,
+        "tools.execute",
+        json!({
+            "sessionId": session_id,
+            "toolCallId": "resolve-1",
+            "mode": "agent",
+            "toolName": "Write",
+            "args": { "path": "f.txt", "content": "both\n" },
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(written["ok"], true, "{written}");
+    assert_eq!(
+        badge(&call(&state, "session.list", json!({})).await.unwrap()),
+        "active"
+    );
+}

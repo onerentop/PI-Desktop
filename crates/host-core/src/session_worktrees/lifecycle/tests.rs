@@ -443,3 +443,62 @@ async fn pending_work_counts_commits_after_the_owner_branch_is_renamed() {
     let pending = pending_work(&env.state, &env.git, &session).await.unwrap();
     assert_eq!(pending.unmerged_commits, 1);
 }
+
+/// The conflict badge clears once the agent resolved every conflict or
+/// abandoned the merge, not only after the next successful merge.
+#[tokio::test]
+async fn the_conflict_badge_clears_when_the_conflict_is_resolved() {
+    let env = env();
+    fs::write(env.project.join("g.txt"), "base\n").unwrap();
+    git_cmd(&env.project, &["add", "g.txt"]);
+    git_cmd(&env.project, &["commit", "-q", "-m", "g"]);
+    let (session, _created, root) = isolated(&env).await;
+    for file in ["f.txt", "g.txt"] {
+        fs::write(root.join(file), "session\n").unwrap();
+        fs::write(env.project.join(file), "project\n").unwrap();
+    }
+    git_cmd(&env.project, &["commit", "-q", "-am", "project"]);
+    let status = |env: &Env| {
+        let st = env.state.try_lock().unwrap();
+        registry::for_owner(&st.db, &session, None)
+            .unwrap()
+            .unwrap()
+            .status
+    };
+    let merge_now = || async {
+        let token = preview_session(&env.state, &env.git, &session)
+            .await
+            .unwrap()
+            .preview_token;
+        merge_session(&env.state, &env.git, &session, &token).await
+    };
+    assert_eq!(merge_now().await.unwrap_err().code, "WORKTREE_CONFLICT");
+    assert_eq!(status(&env), WorktreeStatus::Conflict);
+
+    // Half resolved: still a conflict.
+    fs::write(root.join("f.txt"), "both\n").unwrap();
+    refresh_conflict_status(&env.state, &env.git, &session).await;
+    assert_eq!(status(&env), WorktreeStatus::Conflict);
+
+    fs::write(root.join("g.txt"), "both\n").unwrap();
+    refresh_conflict_status(&env.state, &env.git, &session).await;
+    assert_eq!(status(&env), WorktreeStatus::Active);
+    // The pending resolution still concludes on the next merge.
+    assert!(matches!(
+        merge_now().await.unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+    assert_eq!(
+        fs::read_to_string(env.project.join("g.txt")).unwrap(),
+        "both\n"
+    );
+
+    // Abandoning a merge clears the badge too.
+    fs::write(root.join("f.txt"), "again\n").unwrap();
+    fs::write(env.project.join("f.txt"), "other\n").unwrap();
+    git_cmd(&env.project, &["commit", "-q", "-am", "other"]);
+    assert_eq!(merge_now().await.unwrap_err().code, "WORKTREE_CONFLICT");
+    git_cmd(&root, &["merge", "--abort"]);
+    refresh_conflict_status(&env.state, &env.git, &session).await;
+    assert_eq!(status(&env), WorktreeStatus::Active);
+}

@@ -4248,6 +4248,20 @@ async fn handle_request(
                     }
                 }
 
+                // ADR 0326: a session that resolved its merge conflict (or
+                // aborted the merge) drops its conflict badge before the turn
+                // ends and the sidebar refreshes.
+                if p.delegation_id.is_none()
+                    && matches!(p.tool_name.as_str(), "Write" | "Edit" | "Bash")
+                {
+                    crate::session_worktrees::lifecycle::refresh_conflict_status(
+                        &state,
+                        &crate::session_worktrees::git::GitRunner::default(),
+                        &p.session_id,
+                    )
+                    .await;
+                }
+
                 let st = state.lock().await;
                 // Scratch files are temp by definition: keep them out of the
                 // artifacts table so the work panel file list only shows

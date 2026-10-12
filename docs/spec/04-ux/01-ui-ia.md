@@ -242,7 +242,8 @@ destination, chat as the home surface, tools and permissions inline.
   holds **Worktree setup command…**. An isolated row shows an `Isolated` badge
   (or `Conflict`, `Folder missing`, `Setup failed`) and adds **Merge into
   project…** (preview of commits and files, then merge; conflicting files are
-  listed and stay in the session), **Show worktree folder**, and **Setup log**.
+  listed and stay in the session; the `Conflict` badge clears as soon as the
+  session resolves or abandons the conflict, and the next merge concludes it), **Show worktree folder**, and **Setup log**.
   Its delete confirmation states that unmerged work will be lost. Isolated
   sessions are never reused as the empty draft and cannot move to another
   project; forks are ordinary sessions.
