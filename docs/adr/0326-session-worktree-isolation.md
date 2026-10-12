@@ -1,6 +1,6 @@
 # ADR 0326: Isolate parallel sessions of one project in git worktrees
 
-- Status: Accepted; implementation in progress
+- Status: Accepted
 - Date: 2026-10-12
 - Deciders: PI-Desktop maintainers
 - Related: ADR 0062 (parallel delegates), ADR 0089 (delegation tools),
@@ -62,6 +62,25 @@ the project directory.
    of 10 ports per worktree, after Conductor's `CONDUCTOR_PORT`).
 9. Minimum git version is 2.29 (`git worktree repair`). Relative worktree
    links are not used because they raise the repository format version.
+10. "Sync from project" merges the project branch into an isolated session's
+    worktree with the rules of decision 4 (pending session work is committed
+    first, conflicts stay in the worktree) and never touches the project.
+    Without it a session only receives other sessions' work, including their
+    conflict resolutions, when it is merged, so it keeps working on stale
+    code. The sidebar marks a session that lacks project commits (`↓N`); the
+    counts come from one background host call (`worktree.behindAll`) when
+    isolated sessions change, after a merge or sync, and on window focus, so
+    rendering the list never waits for git.
+11. The conflict status follows the worktree, not only the next merge: after
+    each Write, Edit, or Bash call of a conflicted session, host-core clears
+    the status once every conflict is resolved (by the rule the merge uses to
+    conclude it) or the merge was aborted. Text conflicts count as resolved
+    when their markers are gone; binary, add/delete, and modify/delete
+    conflicts need an explicit `git add` or `git rm`.
+12. While host-core commits or merges in a session worktree for a subagent,
+    it holds the session's own tools (new calls queue). It waits at most five
+    seconds for tools already running, then falls back to holding only the
+    session's write permit, so a long Bash run never blocks subagents.
 
 ## Alternatives considered
 
@@ -93,8 +112,10 @@ the project directory.
 ## Validation
 
 host-core tests against real temporary git repositories cover creation,
-merge (including conflicts and dirty-project refusal), hook suppression,
-link-safe removal, orphan cleanup, `.worktreeinclude`, port assignment, and
-repository-subdirectory projects; runtime and renderer tests cover the
-user path. Windows junction removal, long paths, and locked-file removal
-require Windows E2E.
+merge (including conflicts, markerless conflicts, and dirty-project refusal),
+sync from project, behind counts, conflict-status refresh, the session hold,
+hook suppression, link-safe removal, orphan cleanup, `.worktreeinclude`, port
+assignment, and repository-subdirectory projects; IPC, renderer, and Electron
+user-path tests cover the sidebar. `pnpm test:e2e:worktree-live` runs the
+lifecycle against a real model. Windows junction removal, long paths, and
+locked-file removal require Windows E2E.
