@@ -86,6 +86,13 @@ export type WorktreeSyncOutcome =
   | { result: "synced"; commits: number }
   | { result: "upToDate" };
 
+/** `worktree.behindAll`: the sidebar's behind counts, keyed by session id. */
+export type WorktreeBehindCounts = {
+  counts: Record<string, number>;
+  /** A conflict was found resolved; the session list should be refreshed. */
+  statusesChanged: boolean;
+};
+
 /** `worktree.pendingWork`: what deleting the session would lose. */
 export type WorktreePendingWork = {
   unmergedCommits: number;

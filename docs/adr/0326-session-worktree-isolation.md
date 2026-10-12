@@ -72,15 +72,21 @@ the project directory.
     isolated sessions change, after a merge or sync, and on window focus, so
     rendering the list never waits for git.
 11. The conflict status follows the worktree, not only the next merge: after
-    each Write, Edit, or Bash call of a conflicted session, host-core clears
-    the status once every conflict is resolved (by the rule the merge uses to
-    conclude it) or the merge was aborted. Text conflicts count as resolved
-    when their markers are gone; binary, add/delete, and modify/delete
+    each Write, Edit, or Bash call of a conflicted session, after a failed
+    merge or sync, when the session menu opens, and in the background behind
+    check, host-core clears the status once every conflict is resolved (by
+    the rule the merge uses to conclude it) or the merge was aborted. Text
+    conflicts merged by git's text driver count as resolved when their
+    markers (of the file's `conflict-marker-size`) are gone; binary,
+    add/delete, modify/delete, and `merge=binary` / `-merge` / custom-driver
     conflicts need an explicit `git add` or `git rm`.
 12. While host-core commits or merges in a session worktree for a subagent,
-    it holds the session's own tools (new calls queue). It waits at most five
-    seconds for tools already running, then falls back to holding only the
-    session's write permit, so a long Bash run never blocks subagents.
+    it holds the session's own tools (new calls queue, also while the hold is
+    awaited). Calls of subagents rooted in their own worktrees are not held.
+    It waits at most five seconds for tools already running, then falls back
+    to holding only the session's write permit, so a long Bash run never
+    blocks subagents. The runtime gives these host calls a 10-minute
+    deadline so it never reports a merge that is still running as failed.
 
 ## Alternatives considered
 

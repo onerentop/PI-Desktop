@@ -612,7 +612,7 @@ async fn behind_all_counts_what_each_session_lacks() {
     let (one, _c1, root1) = isolated(&env).await;
     let (two, _c2, _root2) = isolated(&env).await;
     let (gone, _c3, root3) = isolated(&env).await;
-    let counts = behind_all(&env.state, &env.git).await.unwrap();
+    let counts = behind_all(&env.state, &env.git).await.unwrap().counts;
     assert_eq!(counts.get(&one), Some(&0));
     assert_eq!(counts.get(&two), Some(&0));
 
@@ -627,8 +627,59 @@ async fn behind_all_counts_what_each_session_lacks() {
     crate::session_worktrees::remove::clear_contents(&root3).unwrap();
     fs::remove_dir_all(&root3).unwrap();
 
-    let counts = behind_all(&env.state, &env.git).await.unwrap();
+    let counts = behind_all(&env.state, &env.git).await.unwrap().counts;
     assert_eq!(counts.get(&one), Some(&0));
     assert_eq!(counts.get(&two), Some(&1));
     assert!(!counts.contains_key(&gone));
+}
+
+/// A merge that concludes the resolution and then fails (dirty project)
+/// must not leave a stale conflict badge; a conflict resolved outside the
+/// app is picked up by the background behind check.
+#[tokio::test]
+async fn failed_merges_and_outside_resolutions_do_not_leave_a_stale_badge() {
+    let env = env();
+    let (session, _created, root) = isolated(&env).await;
+    let status = |env: &Env| {
+        let st = env.state.try_lock().unwrap();
+        registry::for_owner(&st.db, &session, None)
+            .unwrap()
+            .unwrap()
+            .status
+    };
+    let merge_now = || async {
+        let token = preview_session(&env.state, &env.git, &session)
+            .await
+            .unwrap()
+            .preview_token;
+        merge_session(&env.state, &env.git, &session, &token).await
+    };
+    let make_conflict = |line: &str| {
+        fs::write(root.join("f.txt"), format!("session {line}\n")).unwrap();
+        fs::write(env.project.join("f.txt"), format!("project {line}\n")).unwrap();
+        git_cmd(&env.project, &["commit", "-q", "-am", line]);
+    };
+
+    make_conflict("1");
+    assert_eq!(merge_now().await.unwrap_err().code, "WORKTREE_CONFLICT");
+    fs::write(root.join("f.txt"), "both 1\n").unwrap();
+    fs::write(env.project.join("f.txt"), "local edit\n").unwrap();
+    assert_eq!(
+        merge_now().await.unwrap_err().code,
+        "WORKTREE_PROJECT_DIRTY"
+    );
+    assert_eq!(status(&env), WorktreeStatus::Active);
+    git_cmd(&env.project, &["checkout", "--", "f.txt"]);
+    assert!(matches!(
+        merge_now().await.unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+
+    make_conflict("2");
+    assert_eq!(merge_now().await.unwrap_err().code, "WORKTREE_CONFLICT");
+    // Resolved by hand in an editor, without any tool call of the session.
+    fs::write(root.join("f.txt"), "both 2\n").unwrap();
+    let behind = behind_all(&env.state, &env.git).await.unwrap();
+    assert!(behind.statuses_changed);
+    assert_eq!(status(&env), WorktreeStatus::Active);
 }

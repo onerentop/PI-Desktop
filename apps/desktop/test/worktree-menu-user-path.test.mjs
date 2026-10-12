@@ -30,7 +30,7 @@ await i18n.use(initReactI18next).init({ lng: "en", keySeparator: false,
   interpolation: { escapeValue: false } });
 const probes = {
   "/plain": { available: false, errorCode: "WORKTREE_NOT_GIT", message: "raw" },
-  "/odd": { available: false, errorCode: "WORKTREE_GIT_FAILED", message: "git exploded" },
+  "/odd": { available: false, errorCode: "WORKTREE_INTERNAL", message: "git exploded" },
   "/repo": { available: true, uncommittedChanges: false },
 };
 const pending = [];
@@ -42,7 +42,7 @@ window.piDesktop = { platform: "linux", on() { return () => {}; },
     if (channel === IPC.invoke.worktreeBehind) return Promise.resolve({ ok: true, data: behind[payload.sessionId] });
     if (channel === IPC.invoke.worktreeBehindAll) {
       behindAllCalls += 1;
-      return Promise.resolve({ ok: true, data: { ...behind } });
+      return Promise.resolve({ ok: true, data: { counts: { ...behind }, statusesChanged: false } });
     }
     if (channel === IPC.invoke.worktreeSync) {
       synced.push(payload.sessionId);

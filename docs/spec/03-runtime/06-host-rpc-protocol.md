@@ -618,9 +618,12 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
   worktree conflicted and the project untouched.
 - `worktree.behind({ sessionId })` → `{ commits }`, project-branch commits the
   session does not have yet.
-- `worktree.behindAll()` → `{ counts }`, the same count for every isolated
-  session keyed by session id (sessions whose count cannot be read are
-  omitted); the renderer reads it in the background for the sidebar marker.
+- `worktree.behindAll()` → `{ counts, statusesChanged }`: the same count for
+  every isolated session keyed by session id (sessions whose count cannot be
+  read are omitted), computed a few sessions at a time. Conflicted sessions
+  are checked for a resolution first; `statusesChanged` asks the renderer to
+  refresh its session list. The renderer reads it in the background for the
+  sidebar marker.
 - `worktree.sync({ sessionId })` → `{ outcome }` (`synced` with `commits`, or
   `upToDate`): "Sync from project" merges the project branch into the session
   worktree after committing pending session work. The project checkout is not
@@ -637,7 +640,9 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
 - `worktree.delegate.create({ sessionId, delegationId })` → `{ worktree }` and
   `worktree.delegate.settle({ sessionId, delegationId, merge })` →
   `{ settlement }` — agent-runtime only, for `Write`/`Edit` delegates of an
-  isolated session (03-tools-and-permissions §10.2).
+  isolated session (03-tools-and-permissions §10.2). Both use a 10-minute
+  transport deadline (`WORKTREE_DELEGATE_RPC_TIMEOUT_MS`) because they may
+  wait for the session's tools before committing and merging.
 
 ### Tools
 - `tools.list`

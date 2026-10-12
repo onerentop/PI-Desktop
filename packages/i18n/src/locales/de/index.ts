@@ -36,7 +36,7 @@ export const de = {
       "upToDate": "Die Sitzung hat bereits den neuesten Projektstand.",
       "resolveFirst": "Löse zuerst den Konflikt in der Sitzung und führe dann erneut zusammen oder synchronisiere.",
       "success": "{{count}} neue Projekt-Commit(s) in die Sitzung übernommen.",
-      "conflict": "Diese Dateien stehen im Konflikt mit dem Projekt. Löse sie in der Sitzung:",
+      "conflict": "Diese Dateien stehen im Konflikt mit dem Projekt. Löse sie in der Sitzung: {{files}}",
     },
     "setupCommand": {
       "menu": "Worktree-Einrichtungsbefehl…",
@@ -69,6 +69,12 @@ export const de = {
       "missing": "Der isolierte Worktree-Ordner existiert nicht mehr. Lösche diese Sitzung.",
       "commitFailed": "Git konnte die Änderungen der Sitzung nicht committen.",
       "moveUnsupported": "Eine isolierte Sitzung kann nicht in ein anderes Projekt verschoben werden.",
+      "mergeFailed": "Git konnte die Projektänderungen nicht mit der Sitzung zusammenführen, etwa weil eine Datei im Weg ist. Die Sitzung blieb unverändert.",
+      "pathExists": "Ein Worktree oder Branch mit diesem Namen existiert bereits. Versuche es erneut oder entferne den Rest.",
+      "notReady": "Der isolierte Worktree wird noch vorbereitet. Versuche es gleich noch einmal.",
+      "notIsolated": "Diese Sitzung hat keinen isolierten Worktree.",
+      "gitFailed": "Ein Git-Befehl ist fehlgeschlagen. Prüfe das Repository und versuche es erneut.",
+      "gitTimeout": "Git hat nicht rechtzeitig geantwortet. Versuche es erneut.",
     },
   },
   "app": {

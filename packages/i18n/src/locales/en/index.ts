@@ -34,7 +34,7 @@ export const en = {
       upToDate: "The session already has the project's latest code.",
       resolveFirst: "Resolve the conflict in the session first, then merge or sync again.",
       success: "Brought {{count}} new project commit(s) into the session.",
-      conflict: "These files conflict with the project. Resolve them in the session:",
+      conflict: "These files conflict with the project. Resolve them in the session: {{files}}",
     },
     setupCommand: {
       menu: "Worktree setup command…",
@@ -67,6 +67,12 @@ export const en = {
       missing: "The isolated worktree folder no longer exists. Delete this session.",
       commitFailed: "Git could not commit the session's changes.",
       moveUnsupported: "An isolated session cannot move to another project.",
+      mergeFailed: "Git could not combine the project's changes with the session, for example because a file is in the way. The session was left unchanged.",
+      pathExists: "A worktree or branch with this name already exists. Try again or delete the leftover.",
+      notReady: "The isolated worktree is still being prepared. Try again in a moment.",
+      notIsolated: "This session has no isolated worktree.",
+      gitFailed: "A git command failed. Check the repository and try again.",
+      gitTimeout: "Git did not respond in time. Try again.",
     },
   },
   app: {

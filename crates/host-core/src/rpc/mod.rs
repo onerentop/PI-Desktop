@@ -4062,11 +4062,28 @@ async fn handle_request(
                 // Admission follows permission so approval waits do not occupy
                 // execution capacity. Keep this permit through review, the
                 // runner, and bookkeeping so every accepted call is bounded.
-                let tool_budget = {
+                // A subagent working in its own worktree (ADR 0326) is not
+                // stopped while its session's worktree is held for a merge.
+                let (tool_budget, own_worktree) = {
                     let st = state.lock().await;
-                    st.tool_budget.clone()
+                    let own = matches!(
+                        crate::session_worktrees::delegate::tool_root(
+                            &st.db,
+                            &p.session_id,
+                            p.delegation_id.as_deref(),
+                        ),
+                        Ok(Some(_))
+                    );
+                    (st.tool_budget.clone(), own)
                 };
-                let _tool_permit = match tool_budget.acquire(&p.session_id, &p.tool_name).await {
+                let admitted = if own_worktree {
+                    tool_budget
+                        .acquire_in_own_worktree(&p.session_id, &p.tool_name)
+                        .await
+                } else {
+                    tool_budget.acquire(&p.session_id, &p.tool_name).await
+                };
+                let _tool_permit = match admitted {
                     Ok(permit) => permit,
                     Err(error) => {
                         tracing::warn!(

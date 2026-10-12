@@ -36,7 +36,7 @@ export const tr = {
       upToDate: "Oturum zaten projenin en güncel koduna sahip.",
       resolveFirst: "Önce oturumdaki çakışmayı çözün, ardından yeniden birleştirin veya eşitleyin.",
       success: "Projeden {{count}} yeni commit oturuma alındı.",
-      conflict: "Bu dosyalar projeyle çakışıyor. Bunları oturumda çözün:",
+      conflict: "Bu dosyalar projeyle çakışıyor. Bunları oturumda çözün: {{files}}",
     },
     setupCommand: {
       menu: "Worktree hazırlık komutu…",
@@ -69,6 +69,12 @@ export const tr = {
       missing: "Yalıtılmış worktree klasörü artık yok. Bu oturumu silin.",
       commitFailed: "Git oturumun değişikliklerini commit edemedi.",
       moveUnsupported: "Yalıtılmış bir oturum başka bir projeye taşınamaz.",
+      mergeFailed: "Git, örneğin yolda bir dosya olduğu için proje değişikliklerini oturumla birleştiremedi. Oturum değişmedi.",
+      pathExists: "Bu adda bir worktree veya dal zaten var. Yeniden deneyin ya da kalıntıyı silin.",
+      notReady: "Yalıtılmış worktree hâlâ hazırlanıyor. Birazdan yeniden deneyin.",
+      notIsolated: "Bu oturumun yalıtılmış worktree'si yok.",
+      gitFailed: "Bir git komutu başarısız oldu. Depoyu kontrol edip yeniden deneyin.",
+      gitTimeout: "Git zamanında yanıt vermedi. Yeniden deneyin.",
     },
   },
   app: {

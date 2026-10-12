@@ -76,6 +76,42 @@ impl Drop for ToolPermit {
     }
 }
 
+/// Marks a session whose exclusive permit is awaited; see `BudgetState::
+/// exclusive_pending`.
+struct PendingExclusive {
+    budget: ToolBudget,
+    session_id: String,
+}
+
+impl PendingExclusive {
+    fn register(budget: &ToolBudget, session_id: &str) -> Self {
+        *budget
+            .lock()
+            .exclusive_pending
+            .entry(session_id.to_string())
+            .or_default() += 1;
+        Self {
+            budget: budget.clone(),
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl Drop for PendingExclusive {
+    fn drop(&mut self) {
+        let mut state = self.budget.lock();
+        if let Some(count) = state.exclusive_pending.get_mut(&self.session_id) {
+            *count -= 1;
+            if *count == 0 {
+                state.exclusive_pending.remove(&self.session_id);
+            }
+        }
+        // Calls held back while the permit was awaited may run now (or
+        // stay held by the granted exclusive permit).
+        state.dispatch();
+    }
+}
+
 /// See `ToolBudget::acquire_session_exclusive`.
 pub struct SessionExclusivePermit {
     budget: ToolBudget,
@@ -107,12 +143,17 @@ pub struct ToolBudgetSnapshot {
 struct Request {
     session_id: String,
     class: ToolClass,
+    /// Runs in a subagent's own worktree (ADR 0326), so holding the session
+    /// for work in the session worktree does not need to stop it.
+    own_worktree: bool,
 }
 
 #[derive(Default)]
 struct SessionUsage {
     active: usize,
     mutations: usize,
+    /// Of `active`, calls rooted in a subagent's own worktree.
+    own_worktree: usize,
 }
 
 struct WaitingRequest {
@@ -132,6 +173,9 @@ struct BudgetState {
     next_id: u64,
     /// Sessions held by a `SessionExclusivePermit`.
     exclusive: HashSet<String>,
+    /// Sessions whose exclusive permit is being awaited; their new calls wait
+    /// too, so steady traffic cannot keep the session from ever going quiet.
+    exclusive_pending: HashMap<String, usize>,
 }
 
 impl ToolClass {
@@ -152,7 +196,10 @@ impl BudgetState {
         {
             return false;
         }
-        if self.exclusive.contains(&request.session_id) {
+        if !request.own_worktree
+            && (self.exclusive.contains(&request.session_id)
+                || self.exclusive_pending.contains_key(&request.session_id))
+        {
             return false;
         }
         self.sessions.get(&request.session_id).is_none_or(|usage| {
@@ -170,6 +217,9 @@ impl BudgetState {
         if request.class == ToolClass::Mutation {
             usage.mutations += 1;
         }
+        if request.own_worktree {
+            usage.own_worktree += 1;
+        }
     }
 
     fn release(&mut self, request: &Request) {
@@ -182,6 +232,9 @@ impl BudgetState {
         usage.active -= 1;
         if request.class == ToolClass::Mutation {
             usage.mutations -= 1;
+        }
+        if request.own_worktree {
+            usage.own_worktree -= 1;
         }
         if usage.active == 0 {
             self.sessions.remove(&request.session_id);
@@ -287,7 +340,18 @@ impl ToolBudget {
         session_id: &str,
         tool_name: &str,
     ) -> Result<ToolPermit, AdmissionError> {
-        self.acquire_with_timeout(session_id, tool_name, QUEUE_WAIT)
+        self.acquire_with_timeout(session_id, tool_name, false, QUEUE_WAIT)
+            .await
+    }
+
+    /// `acquire` for a call rooted in a subagent's own worktree: a session
+    /// hold for the session worktree does not stop it.
+    pub async fn acquire_in_own_worktree(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+    ) -> Result<ToolPermit, AdmissionError> {
+        self.acquire_with_timeout(session_id, tool_name, true, QUEUE_WAIT)
             .await
     }
 
@@ -295,11 +359,13 @@ impl ToolBudget {
         &self,
         session_id: &str,
         tool_name: &str,
+        own_worktree: bool,
         wait: Duration,
     ) -> Result<ToolPermit, AdmissionError> {
         let request = Request {
             session_id: session_id.to_string(),
             class: ToolClass::from_name(tool_name),
+            own_worktree,
         };
         let ready = Arc::new(Notify::new());
         let guard = {
@@ -347,6 +413,8 @@ impl ToolBudget {
         wait: Duration,
     ) -> Option<SessionExclusivePermit> {
         let deadline = tokio::time::Instant::now() + wait;
+        // Dropped on every exit, including cancellation of this future.
+        let _pending = PendingExclusive::register(self, session_id);
         loop {
             // Registered before the check, so a release in between still wakes us.
             let released = self.released.notified();
@@ -354,8 +422,11 @@ impl ToolBudget {
             released.as_mut().enable();
             {
                 let mut state = self.lock();
-                if !state.sessions.contains_key(session_id) && !state.exclusive.contains(session_id)
-                {
+                let busy = state
+                    .sessions
+                    .get(session_id)
+                    .is_some_and(|usage| usage.active > usage.own_worktree);
+                if !busy && !state.exclusive.contains(session_id) {
                     state.exclusive.insert(session_id.to_string());
                     return Some(SessionExclusivePermit {
                         budget: self.clone(),

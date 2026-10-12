@@ -36,7 +36,7 @@ export const zhTW = {
       upToDate: "工作階段已包含專案的最新程式碼。",
       resolveFirst: "請先在工作階段中解決衝突，再合併或同步。",
       success: "已把專案的 {{count}} 個新提交同步到工作階段。",
-      conflict: "這些檔案與專案衝突，請在工作階段中解決：",
+      conflict: "這些檔案與專案衝突，請在工作階段中解決：{{files}}",
     },
     setupCommand: {
       menu: "Worktree 初始化指令…",
@@ -69,6 +69,12 @@ export const zhTW = {
       missing: "隔離 worktree 資料夾已不存在，請刪除此工作階段。",
       commitFailed: "Git 無法提交工作階段的變更。",
       moveUnsupported: "隔離工作階段無法移到其他專案。",
+      mergeFailed: "Git 無法把專案的變更合入工作階段（例如有檔案擋住了合併），工作階段保持不變。",
+      pathExists: "同名的 worktree 或分支已存在。請重試，或刪除殘留的 worktree/分支。",
+      notReady: "隔離 worktree 仍在準備中，請稍後再試。",
+      notIsolated: "此工作階段沒有隔離 worktree。",
+      gitFailed: "Git 命令執行失敗，請檢查儲存庫後重試。",
+      gitTimeout: "Git 回應逾時，請重試。",
     },
   },
   app: {

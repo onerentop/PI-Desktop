@@ -333,7 +333,7 @@ async fn conclude_resolved_merge(git: &GitRunner, worktree: &Path) -> Result<(),
     let mut unresolved = Vec::new();
     for file in unmerged_files(git, worktree).await? {
         let file_stages = stages.get(&file).map(Vec::as_slice).unwrap_or(&[]);
-        if resolved_by_edit(worktree, &file, file_stages) {
+        if resolved_by_edit(git, worktree, &file, file_stages).await? {
             git.run(worktree, &["add", "--", &file]).await?;
         } else {
             unresolved.push(file);
@@ -353,10 +353,13 @@ async fn conclude_resolved_merge(git: &GitRunner, worktree: &Path) -> Result<(),
 /// by the same rule `land` uses to conclude it (`resolved_by_edit`).
 pub async fn conflicts_resolved(git: &GitRunner, worktree: &Path) -> Result<bool, WorktreeError> {
     let stages = conflict_stages(git, worktree).await?;
-    Ok(unmerged_files(git, worktree).await?.iter().all(|file| {
-        let file_stages = stages.get(file).map(Vec::as_slice).unwrap_or(&[]);
-        resolved_by_edit(worktree, file, file_stages)
-    }))
+    for file in unmerged_files(git, worktree).await? {
+        let file_stages = stages.get(&file).map(Vec::as_slice).unwrap_or(&[]);
+        if !resolved_by_edit(git, worktree, &file, file_stages).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub async fn unmerged_files(
@@ -414,10 +417,59 @@ fn parse_porcelain(status: &str) -> Vec<(String, String)> {
     entries
 }
 
-fn has_conflict_markers(content: &[u8]) -> bool {
+/// Default length of git's conflict markers (`conflict-marker-size`).
+const MARKER_SIZE: usize = 7;
+
+fn has_conflict_markers(content: &[u8], size: usize) -> bool {
     let text = String::from_utf8_lossy(content);
+    let is_marker = |line: &str, mark: char| {
+        let run = line.chars().take_while(|c| *c == mark).count();
+        run == size && matches!(line[run..].chars().next(), None | Some(' ') | Some('\r'))
+    };
     text.lines()
-        .any(|line| line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> "))
+        .any(|line| is_marker(line, '<') || is_marker(line, '>'))
+}
+
+/// How git merged `path`: whether it writes conflict markers (the default
+/// text driver) and with which marker length. `merge=binary`, `-merge`, and
+/// custom drivers leave one side in the file without markers.
+async fn marker_rules(
+    git: &GitRunner,
+    worktree: &Path,
+    path: &str,
+) -> Result<Option<usize>, WorktreeError> {
+    let output = git
+        .run(
+            worktree,
+            &[
+                "check-attr",
+                "-z",
+                "merge",
+                "conflict-marker-size",
+                "--",
+                path,
+            ],
+        )
+        .await?;
+    let fields: Vec<&str> = output.split('\0').collect();
+    let mut merge = "unspecified";
+    let mut size = MARKER_SIZE;
+    for entry in fields.chunks(3) {
+        if let [_, attribute, value] = entry {
+            match *attribute {
+                "merge" => merge = value,
+                "conflict-marker-size" => {
+                    if let Ok(parsed) = value.parse::<usize>() {
+                        if parsed > 0 {
+                            size = parsed;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(matches!(merge, "unspecified" | "set" | "text").then_some(size))
 }
 
 /// Full ref of a local branch, so a tag with the same short name is never
@@ -446,22 +498,31 @@ async fn conflict_stages(
 }
 
 /// Whether an unstaged conflicted file may be treated as resolved: only a
-/// text file changed on both sides, which git fills with conflict markers,
-/// once those markers are gone. Binary, delete/modify, and add/delete
+/// text file changed on both sides and merged by git's text driver, which
+/// fills it with conflict markers, once those markers are gone. Binary,
+/// delete/modify, add/delete, and `merge=binary` / `-merge` / custom-driver
 /// conflicts leave no markers, so they need an explicit `git add`/`git rm`.
-fn resolved_by_edit(worktree: &Path, path: &str, stages: &[char]) -> bool {
+async fn resolved_by_edit(
+    git: &GitRunner,
+    worktree: &Path,
+    path: &str,
+    stages: &[char],
+) -> Result<bool, WorktreeError> {
     if !(stages.contains(&'2') && stages.contains(&'3')) {
-        return false;
+        return Ok(false);
     }
     let file = worktree.join(path);
     match std::fs::symlink_metadata(&file) {
         Ok(metadata) if metadata.is_file() => {}
-        _ => return false,
+        _ => return Ok(false),
     }
-    match std::fs::read(&file) {
-        Ok(content) => !content.contains(&0) && !has_conflict_markers(&content),
+    let Some(size) = marker_rules(git, worktree, path).await? else {
+        return Ok(false);
+    };
+    Ok(match std::fs::read(&file) {
+        Ok(content) => !content.contains(&0) && !has_conflict_markers(&content, size),
         Err(_) => false,
-    }
+    })
 }
 
 /// Hash of the worktree's uncommitted content: the tracked diff against
@@ -472,22 +533,83 @@ async fn content_fingerprint(
     worktree: &Path,
     status: &str,
 ) -> Result<u64, WorktreeError> {
-    let mut bytes = git
+    let diff = git
         .run(
             worktree,
             &["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv"],
         )
-        .await?
-        .into_bytes();
-    for (code, path) in parse_porcelain(status) {
-        if code == "?" {
-            bytes.extend_from_slice(path.as_bytes());
-            bytes.push(0);
-            bytes.extend(std::fs::read(worktree.join(&path)).unwrap_or_default());
-            bytes.push(0);
+        .await?;
+    let untracked: Vec<String> = parse_porcelain(status)
+        .into_iter()
+        .filter(|(code, _)| code == "?")
+        .map(|(_, path)| path)
+        .collect();
+    let worktree = worktree.to_path_buf();
+    // File reads block, so they run off the async workers.
+    tokio::task::spawn_blocking(move || {
+        let mut hash = fnv1a64(diff.as_bytes());
+        for path in untracked {
+            hash = fnv_extend(hash, path.as_bytes());
+            hash = fnv_extend(hash, &[0]);
+            hash = untracked_entry_hash(hash, &worktree.join(&path));
+        }
+        hash
+    })
+    .await
+    .map_err(|error| WorktreeError::new("WORKTREE_INTERNAL", error.to_string()))
+}
+
+/// Bytes of one untracked file read into a preview token. Larger files add
+/// their size and modification time instead, so a huge file cannot stall the
+/// host; the agent cannot change one without changing either.
+const FINGERPRINT_FILE_LIMIT: u64 = 16 * 1024 * 1024;
+
+fn fnv_extend(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Never follows a link and never opens anything but a regular file, so a
+/// link to `/dev/zero` or a FIFO cannot hang or exhaust the host.
+fn untracked_entry_hash(hash: u64, path: &Path) -> u64 {
+    use std::io::Read;
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return fnv_extend(hash, b"missing");
+    };
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(path).unwrap_or_default();
+        return fnv_extend(
+            fnv_extend(hash, b"link:"),
+            target.to_string_lossy().as_bytes(),
+        );
+    }
+    if !metadata.is_file() {
+        return fnv_extend(hash, b"special");
+    }
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    let hash = fnv_extend(hash, &metadata.len().to_le_bytes());
+    if metadata.len() > FINGERPRINT_FILE_LIMIT {
+        return fnv_extend(hash, &modified.to_le_bytes());
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return fnv_extend(hash, b"unreadable");
+    };
+    let mut reader = file.take(FINGERPRINT_FILE_LIMIT);
+    let mut buffer = [0u8; 64 * 1024];
+    let mut hash = hash;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break hash,
+            Ok(read) => hash = fnv_extend(hash, &buffer[..read]),
         }
     }
-    Ok(fnv1a64(&bytes))
 }
 
 pub fn commit_message(title: &str) -> String {
@@ -771,6 +893,75 @@ mod tests {
             MergeOutcome::Merged { .. }
         ));
         assert!(!f.repo.join("f.txt").exists());
+    }
+
+    /// Conflicts git resolves without markers by attribute (`merge=binary`,
+    /// for example lock files) and custom marker sizes are not mistaken for
+    /// resolved edits.
+    #[tokio::test]
+    async fn attribute_driven_conflicts_need_an_explicit_add() {
+        for attributes in ["f.txt merge=binary\n", "f.txt conflict-marker-size=10\n"] {
+            let f = fixture("a\n");
+            fs::write(f.repo.join(".gitattributes"), attributes).unwrap();
+            git_cmd(&f.repo, &["add", ".gitattributes"]);
+            git_cmd(&f.repo, &["commit", "-q", "-m", "attributes"]);
+            git_cmd(wt(&f), &["merge", "-q", "main"]);
+            fs::write(wt(&f).join("f.txt"), "SESSION\n").unwrap();
+            git_cmd(wt(&f), &["commit", "-q", "-am", "session"]);
+            fs::write(f.repo.join("f.txt"), "PROJECT\n").unwrap();
+            git_cmd(&f.repo, &["commit", "-q", "-am", "project"]);
+
+            assert_eq!(
+                merge_now(&f).await.unwrap_err().code,
+                "WORKTREE_CONFLICT",
+                "{attributes}"
+            );
+            // A retry must not take the session's side silently.
+            assert_eq!(
+                merge_now(&f).await.unwrap_err().code,
+                "WORKTREE_CONFLICT",
+                "{attributes}"
+            );
+            assert!(!conflicts_resolved(&GitRunner::default(), wt(&f))
+                .await
+                .unwrap());
+            assert_eq!(
+                fs::read_to_string(f.repo.join("f.txt")).unwrap(),
+                "PROJECT\n"
+            );
+
+            fs::write(wt(&f).join("f.txt"), "BOTH\n").unwrap();
+            git_cmd(wt(&f), &["add", "f.txt"]);
+            assert!(matches!(
+                merge_now(&f).await.unwrap(),
+                MergeOutcome::Merged { .. }
+            ));
+            assert_eq!(fs::read_to_string(f.repo.join("f.txt")).unwrap(), "BOTH\n");
+        }
+    }
+
+    /// A preview never follows an untracked link or opens a special file, so
+    /// a link to `/dev/zero` or a FIFO cannot hang the host.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn previews_do_not_read_through_links_or_special_files() {
+        let f = fixture("a\n");
+        std::os::unix::fs::symlink("/dev/zero", wt(&f).join("zero")).unwrap();
+        let status = std::process::Command::new("mkfifo")
+            .arg(wt(&f).join("pipe"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let git = GitRunner::default();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(20), preview(&git, &f.row))
+            .await
+            .expect("preview must not block")
+            .unwrap();
+        // The link target is part of the token: retargeting it invalidates it.
+        fs::remove_file(wt(&f).join("zero")).unwrap();
+        std::os::unix::fs::symlink("/dev/null", wt(&f).join("zero")).unwrap();
+        let second = preview(&git, &f.row).await.unwrap();
+        assert_ne!(first.preview_token, second.preview_token);
     }
 
     /// A tag named like the owner branch does not redirect the merge.

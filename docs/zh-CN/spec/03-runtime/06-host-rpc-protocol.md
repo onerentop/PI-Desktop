@@ -424,8 +424,9 @@ off | minimal | low | medium | high | xhigh | max
   `WORKTREE_CHANGED_SINCE_PREVIEW`；项目有未提交改动为 `WORKTREE_PROJECT_DIRTY`；冲突为
   `WORKTREE_CONFLICT`，worktree 保持冲突状态，项目不受影响。
 - `worktree.behind({ sessionId })` → `{ commits }`，即会话尚未包含的项目分支提交数。
-- `worktree.behindAll()` → `{ counts }`，以会话 id 为键给出每个隔离会话的同一计数（读不到的会话省略）；
-  渲染层在后台读取，用于侧边栏标记。
+- `worktree.behindAll()` → `{ counts, statusesChanged }`：以会话 id 为键给出每个隔离会话的同一计数
+  （读不到的会话省略），每次并发检查少量会话。处于冲突状态的会话会先检查是否已解决；
+  `statusesChanged` 提示渲染层刷新会话列表。渲染层在后台读取，用于侧边栏标记。
 - `worktree.sync({ sessionId })` → `{ outcome }`（`synced` 及 `commits`，或 `upToDate`）：
   “从项目同步”先提交会话中待提交的工作，再把项目分支合入会话 worktree。不改动项目检出；
   冲突为 `WORKTREE_CONFLICT`，留在 worktree 中，并像合并冲突一样标记会话。
@@ -438,7 +439,8 @@ off | minimal | low | medium | high | xhigh | max
   `NOT_FOUND`）。该命令在每个新 worktree 中运行一次。
 - `worktree.delegate.create({ sessionId, delegationId })` → `{ worktree }` 和
   `worktree.delegate.settle({ sessionId, delegationId, merge })` → `{ settlement }`——仅供
-  agent-runtime 为隔离会话中的 `Write`/`Edit` 子代理使用（03-tools-and-permissions §10.2）。
+  agent-runtime 为隔离会话中的 `Write`/`Edit` 子代理使用（03-tools-and-permissions §10.2）。两者使用
+  10 分钟的传输期限（`WORKTREE_DELEGATE_RPC_TIMEOUT_MS`），因为提交和合并前可能要等待会话的工具。
 
 ### 工具
 - `tools.list`

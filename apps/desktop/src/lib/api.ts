@@ -93,6 +93,7 @@ import type {
   WorktreeMergePreview,
   WorktreePendingWork,
   WorktreeSyncOutcome,
+  WorktreeBehindCounts,
   WorktreeProbeResult,
   WorktreeSetupLog,
   SessionCollaborationSummary,
@@ -630,7 +631,7 @@ export const api = {
   getWorktreeBehind: (sessionId: string) =>
     invoke<number>(IPC.invoke.worktreeBehind, { sessionId }),
   /** Project commits each isolated session lacks, keyed by session id. */
-  getWorktreeBehindAll: () => invoke<Record<string, number>>(IPC.invoke.worktreeBehindAll),
+  getWorktreeBehindAll: () => invoke<WorktreeBehindCounts>(IPC.invoke.worktreeBehindAll),
   syncWorktree: (sessionId: string) =>
     invoke<WorktreeSyncOutcome>(IPC.invoke.worktreeSync, { sessionId }),
   getWorktreePendingWork: (sessionId: string) =>

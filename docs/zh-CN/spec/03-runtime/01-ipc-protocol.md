@@ -1123,7 +1123,7 @@ type ProjectRecord = {
   有未提交改动
 - `worktree/preview({ sessionId })` / `worktree/merge({ sessionId, previewToken })`
 - `worktree/behind({ sessionId })` → 提交数，以及 `worktree/sync({ sessionId })` — “从项目同步”；`worktree/behindAll()`
-  → `{ [sessionId]: count }`，用于侧边栏标记
+  → `{ counts: { [sessionId]: count }, statusesChanged }`，用于侧边栏标记
 - `worktree/pendingWork({ sessionId })` — 删除时会丢弃的未合并工作
 - `worktree/setupLog({ sessionId })`
 - `worktree/reveal({ sessionId })` — Electron Main 通过 `worktree.location` 解析文件夹并在

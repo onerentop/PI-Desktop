@@ -111,8 +111,9 @@ test("sync from project forwards the session and unwraps the count and outcome",
   ]);
 });
 
-test("behind counts for the sidebar come back as a plain map", async () => {
-  const { invoke, calls } = setup({ "worktree.behindAll": { counts: { s1: 2, s2: 0 } } });
-  assert.deepEqual(await invoke(IPC.invoke.worktreeBehindAll), { s1: 2, s2: 0 });
+test("behind counts for the sidebar pass through unchanged", async () => {
+  const behind = { counts: { s1: 2, s2: 0 }, statusesChanged: false };
+  const { invoke, calls } = setup({ "worktree.behindAll": behind });
+  assert.deepEqual(await invoke(IPC.invoke.worktreeBehindAll), behind);
   assert.deepEqual(calls, [{ method: "worktree.behindAll", params: {} }]);
 });

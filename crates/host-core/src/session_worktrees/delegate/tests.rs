@@ -299,3 +299,47 @@ async fn a_long_parent_tool_does_not_block_the_merge_back() {
     ));
     assert_eq!(read(&env.session_root.join("g.txt")), "subagent");
 }
+
+/// Review follow-ups: a vanished subagent folder still counts toward the
+/// delete warning, and a row left `missing` next to an existing folder is
+/// usable again.
+#[tokio::test]
+async fn vanished_subagent_work_is_reported_and_a_restored_folder_is_usable() {
+    let env = env().await;
+    let a = env.create("chain-a").await;
+    fs::write(a.join("g.txt"), "committed").unwrap();
+    git_cmd(&a, &["add", "g.txt"]);
+    git_cmd(&a, &["commit", "-q", "-m", "subagent work"]);
+    crate::session_worktrees::remove::clear_contents(&a).unwrap();
+    fs::remove_dir_all(&a).unwrap();
+    let pending = lifecycle::pending_work(&env.state, &env.git, &env.session)
+        .await
+        .unwrap();
+    assert!(pending.unmerged_commits >= 1, "{pending:?}");
+
+    // A re-attach that failed after `worktree add` leaves the folder back
+    // but the row `missing`.
+    let b = env.create("chain-b").await;
+    let row = env.row("chain-b").await.unwrap();
+    registry::set_status(&env.state.lock().await.db, &row.id, WorktreeStatus::Missing).unwrap();
+    assert_eq!(env.create("chain-b").await, b);
+    assert_eq!(
+        env.row("chain-b").await.unwrap().status,
+        WorktreeStatus::Active
+    );
+}
+
+/// With the owner branch gone, commits a subagent branch shares with the
+/// session still count: the subagent branch is deleted with the session.
+#[tokio::test]
+async fn subagent_branches_do_not_hide_session_work_when_the_owner_is_gone() {
+    let env = env().await;
+    fs::write(env.session_root.join("f.txt"), "session\n").unwrap();
+    git_cmd(&env.session_root, &["commit", "-q", "-am", "session work"]);
+    env.create("chain-a").await;
+    git_cmd(&env.project, &["branch", "-m", "main", "renamed"]);
+    let pending = lifecycle::pending_work(&env.state, &env.git, &env.session)
+        .await
+        .unwrap();
+    assert!(pending.unmerged_commits >= 1, "{pending:?}");
+}

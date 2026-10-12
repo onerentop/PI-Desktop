@@ -36,7 +36,7 @@ export const zhCN = {
       upToDate: "会话已包含项目的最新代码。",
       resolveFirst: "请先在会话中解决冲突，再合并或同步。",
       success: "已把项目的 {{count}} 个新提交同步到会话。",
-      conflict: "这些文件与项目冲突，请在会话中解决：",
+      conflict: "这些文件与项目冲突，请在会话中解决：{{files}}",
     },
     setupCommand: {
       menu: "Worktree 初始化命令…",
@@ -69,6 +69,12 @@ export const zhCN = {
       missing: "隔离 worktree 文件夹已不存在，请删除该会话。",
       commitFailed: "Git 无法提交会话的改动。",
       moveUnsupported: "隔离会话不能移到其他项目。",
+      mergeFailed: "Git 无法把项目的改动合入会话（例如有文件挡住了合并），会话保持不变。",
+      pathExists: "同名的 worktree 或分支已存在。请重试，或删除残留的 worktree/分支。",
+      notReady: "隔离 worktree 仍在准备中，请稍后再试。",
+      notIsolated: "此会话没有隔离 worktree。",
+      gitFailed: "Git 命令执行失败，请检查仓库后重试。",
+      gitTimeout: "Git 响应超时，请重试。",
     },
   },
   app: {

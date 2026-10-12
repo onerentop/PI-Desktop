@@ -19,6 +19,12 @@ const ERROR_KEYS: Record<string, string> = {
   [WorktreeErrorCodes.MISSING]: "worktree.errors.missing",
   [WorktreeErrorCodes.COMMIT_FAILED]: "worktree.errors.commitFailed",
   [WorktreeErrorCodes.MOVE_UNSUPPORTED]: "worktree.errors.moveUnsupported",
+  [WorktreeErrorCodes.MERGE_FAILED]: "worktree.errors.mergeFailed",
+  [WorktreeErrorCodes.PATH_EXISTS]: "worktree.errors.pathExists",
+  [WorktreeErrorCodes.NOT_READY]: "worktree.errors.notReady",
+  [WorktreeErrorCodes.NOT_ISOLATED]: "worktree.errors.notIsolated",
+  [WorktreeErrorCodes.GIT_FAILED]: "worktree.errors.gitFailed",
+  [WorktreeErrorCodes.GIT_TIMEOUT]: "worktree.errors.gitTimeout",
 };
 
 /** The `WORKTREE_*` code of an API error; `invoke` stores it as `code`. */
@@ -105,7 +111,9 @@ export async function syncIsolatedSession(sessionId: string, t: TFunction): Prom
     const files =
       worktreeErrorCode(error) === WorktreeErrorCodes.CONFLICT ? worktreeConflictFiles(error) : [];
     showToast(
-      files.length > 0 ? `${t("worktree.sync.conflict")} ${files.join(", ")}` : worktreeErrorMessage(error, t),
+      files.length > 0
+        ? t("worktree.sync.conflict", { files: files.join(", ") })
+        : worktreeErrorMessage(error, t),
       { variant: "error" },
     );
   } finally {

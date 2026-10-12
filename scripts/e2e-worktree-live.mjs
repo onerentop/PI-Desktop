@@ -67,6 +67,11 @@ if (process.env.PI_DESKTOP_TEST_PROVIDER_DATA_DIR?.trim()) {
   };
 }
 console.log(`model: ${live.name} / ${live.model} (${live.apiStyle})`);
+// The host inherits this process's environment and the live model runs Bash
+// with it, so the key must not be in it (`env` would print it).
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("PI_DESKTOP_TEST_")) delete process.env[name];
+}
 
 const temp = mkdtempSync(join(tmpdir(), "pi-worktree-live-"));
 const dataDir = join(temp, "data");
@@ -312,7 +317,9 @@ try {
 } finally {
   for (const runtime of runtimes.values()) await runtime.dispose().catch(() => {});
   await host.stop().catch(() => {});
-  if (process.env.PI_DESKTOP_KEEP_TEMP) console.log(`kept ${temp}`);
+  if (process.env.PI_DESKTOP_KEEP_TEMP) {
+    console.log(`kept ${temp} (its data directory holds the provider key; delete it when done)`);
+  }
   else rmSync(temp, { recursive: true, force: true });
 }
 

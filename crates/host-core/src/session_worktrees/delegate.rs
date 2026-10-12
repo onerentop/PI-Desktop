@@ -215,6 +215,13 @@ pub async fn create_delegate_worktree(
         let _guard = repo_lock::lock(Path::new(&row.common_dir)).await;
         if row.status != WorktreeStatus::Creating {
             if Path::new(&row.path).is_dir() {
+                // A re-attach that failed after `worktree add` left the
+                // folder back but the row `missing`; the folder decides.
+                if row.status == WorktreeStatus::Missing {
+                    let st = state.lock().await;
+                    registry::set_status(&st.db, &row.id, WorktreeStatus::Active)?;
+                    return Ok(summary(&registry::get(&st.db, &row.id)?.unwrap_or(row)));
+                }
                 return Ok(summary(&row));
             }
             if let Some(row) = reattach(state, git, &session, row.clone()).await? {

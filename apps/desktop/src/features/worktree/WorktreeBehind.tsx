@@ -42,7 +42,12 @@ export function WorktreeBehindWatcher() {
     let current = true;
     api
       .getWorktreeBehindAll()
-      .then((counts) => current && setBehind(counts))
+      .then((result) => {
+        if (!current) return;
+        setBehind(result.counts);
+        // A conflict resolved outside the app cleared its badge on the host.
+        if (result.statusesChanged) void useAppStore.getState().refreshSessions();
+      })
       .catch(() => undefined);
     return () => {
       current = false;

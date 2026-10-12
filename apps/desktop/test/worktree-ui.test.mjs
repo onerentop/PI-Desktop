@@ -34,6 +34,7 @@ before(async () => {
     store: await server.ssrLoadModule("/src/stores/app-store.ts"),
     behind: await server.ssrLoadModule("/src/features/worktree/WorktreeBehind.tsx"),
     worktreeUi: await server.ssrLoadModule("/src/features/worktree/worktree-ui-store.ts"),
+    shared: await import("@pi-desktop/shared"),
   };
   // Same interpolation setting as the app (main.tsx): React escapes output.
   await i18n.init({
@@ -178,7 +179,7 @@ test("the isolated-session menu item explains why a project cannot host one", ()
     { disabled: true, reason: en.errors.detachedHead },
   );
   assert.deepEqual(
-    isolationAvailability({ available: false, errorCode: "WORKTREE_GIT_FAILED", message: "git exploded" }, t),
+    isolationAvailability({ available: false, errorCode: "WORKTREE_INTERNAL", message: "git exploded" }, t),
     { disabled: true, reason: "git exploded" },
   );
 });
@@ -289,7 +290,7 @@ test("syncing from the project reports new commits, an up-to-date session, and c
   assert.deepEqual(toasts, [
     { message: i18n.t("worktree.sync.success", { count: 3 }), variant: "success" },
     { message: en.sync.upToDate, variant: "info" },
-    { message: `${en.sync.conflict} f.txt, g.txt`, variant: "error" },
+    { message: i18n.t("worktree.sync.conflict", { files: "f.txt, g.txt" }), variant: "error" },
   ]);
   // The badge follows: the list is refreshed after every attempt.
   assert.equal(refreshed, 3);
@@ -352,4 +353,25 @@ test("a conflicted session hides the behind marker and cannot sync until it reso
   assert.doesNotMatch(sync, /aria-busy/);
   // Merging stays available: it concludes the resolution.
   assert.doesNotMatch(menu, /data-action="worktree-merge"[^>]*disabled/);
+});
+
+test("every actionable worktree error has a localized message in every locale", () => {
+  const { worktreeErrorMessage } = modules.actions;
+  const { WorktreeErrorCodes } = modules.shared;
+  const t = i18n.t.bind(i18n);
+  // Conflicts list their files and a changed session is previewed again.
+  const handledElsewhere = new Set(["WORKTREE_CONFLICT"]);
+  for (const code of Object.values(WorktreeErrorCodes)) {
+    if (handledElsewhere.has(code)) continue;
+    const message = worktreeErrorMessage(Object.assign(new Error("raw git output"), { code }), t);
+    assert.notEqual(message, "raw git output", `${code} shows the raw host message`);
+  }
+  for (const [locale, catalog] of Object.entries(catalogs)) {
+    assert.deepEqual(
+      Object.keys(catalog.worktree.errors).sort(),
+      Object.keys(en.errors).sort(),
+      `${locale} worktree errors`,
+    );
+    assert.match(catalog.worktree.sync.conflict, /\{\{files\}\}/, `${locale} sync conflict`);
+  }
 });

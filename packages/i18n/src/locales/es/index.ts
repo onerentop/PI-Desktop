@@ -36,7 +36,7 @@ export const es = {
       "upToDate": "La sesión ya tiene el código más reciente del proyecto.",
       "resolveFirst": "Resuelve primero el conflicto en la sesión y luego vuelve a fusionar o sincronizar.",
       "success": "Se incorporaron {{count}} commit(s) nuevos del proyecto a la sesión.",
-      "conflict": "Estos archivos entran en conflicto con el proyecto. Resuélvelos en la sesión:",
+      "conflict": "Estos archivos entran en conflicto con el proyecto. Resuélvelos en la sesión: {{files}}",
     },
     "setupCommand": {
       "menu": "Comando de preparación del worktree…",
@@ -69,6 +69,12 @@ export const es = {
       "missing": "La carpeta del worktree aislado ya no existe. Elimina esta sesión.",
       "commitFailed": "Git no pudo confirmar los cambios de la sesión.",
       "moveUnsupported": "Una sesión aislada no se puede mover a otro proyecto.",
+      "mergeFailed": "Git no pudo combinar los cambios del proyecto con la sesión, por ejemplo porque un archivo lo impide. La sesión no cambió.",
+      "pathExists": "Ya existe un worktree o una rama con este nombre. Vuelve a intentarlo o elimina el resto.",
+      "notReady": "El worktree aislado aún se está preparando. Vuelve a intentarlo en un momento.",
+      "notIsolated": "Esta sesión no tiene un worktree aislado.",
+      "gitFailed": "Falló un comando de git. Revisa el repositorio y vuelve a intentarlo.",
+      "gitTimeout": "Git no respondió a tiempo. Vuelve a intentarlo.",
     },
   },
   "app": {

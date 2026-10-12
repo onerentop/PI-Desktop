@@ -36,7 +36,7 @@ export const ptBR = {
       upToDate: "A sessão já tem o código mais recente do projeto.",
       resolveFirst: "Resolva primeiro o conflito na sessão e depois mescle ou sincronize de novo.",
       success: "{{count}} commit(s) novo(s) do projeto trazido(s) para a sessão.",
-      conflict: "Estes arquivos conflitam com o projeto. Resolva-os na sessão:",
+      conflict: "Estes arquivos conflitam com o projeto. Resolva-os na sessão: {{files}}",
     },
     setupCommand: {
       menu: "Comando de preparação do worktree…",
@@ -69,6 +69,12 @@ export const ptBR = {
       missing: "A pasta do worktree isolado não existe mais. Exclua esta sessão.",
       commitFailed: "O Git não conseguiu confirmar as alterações da sessão.",
       moveUnsupported: "Uma sessão isolada não pode ser movida para outro projeto.",
+      mergeFailed: "O Git não conseguiu combinar as alterações do projeto com a sessão, por exemplo porque um arquivo atrapalha. A sessão não mudou.",
+      pathExists: "Já existe um worktree ou branch com este nome. Tente de novo ou remova o que sobrou.",
+      notReady: "O worktree isolado ainda está sendo preparado. Tente de novo em instantes.",
+      notIsolated: "Esta sessão não tem um worktree isolado.",
+      gitFailed: "Um comando git falhou. Verifique o repositório e tente de novo.",
+      gitTimeout: "O Git não respondeu a tempo. Tente de novo.",
     },
   },
   app: {

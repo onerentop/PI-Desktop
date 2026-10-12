@@ -36,7 +36,7 @@ export const ko = {
       upToDate: "세션에 이미 프로젝트의 최신 코드가 있습니다.",
       resolveFirst: "먼저 세션에서 충돌을 해결한 다음 다시 병합하거나 동기화하세요.",
       success: "프로젝트의 새 커밋 {{count}}개를 세션에 가져왔습니다.",
-      conflict: "이 파일들이 프로젝트와 충돌합니다. 세션에서 해결하세요:",
+      conflict: "이 파일들이 프로젝트와 충돌합니다. 세션에서 해결하세요: {{files}}",
     },
     setupCommand: {
       menu: "Worktree 설정 명령…",
@@ -69,6 +69,12 @@ export const ko = {
       missing: "격리 worktree 폴더가 더 이상 없습니다. 이 세션을 삭제하세요.",
       commitFailed: "Git이 세션의 변경 사항을 커밋하지 못했습니다.",
       moveUnsupported: "격리 세션은 다른 프로젝트로 옮길 수 없습니다.",
+      mergeFailed: "파일이 가로막는 등의 이유로 Git이 프로젝트 변경 사항을 세션에 합치지 못했습니다. 세션은 변경되지 않았습니다.",
+      pathExists: "같은 이름의 worktree 또는 브랜치가 이미 있습니다. 다시 시도하거나 남은 항목을 삭제하세요.",
+      notReady: "격리된 worktree를 아직 준비 중입니다. 잠시 후 다시 시도하세요.",
+      notIsolated: "이 세션에는 격리된 worktree가 없습니다.",
+      gitFailed: "git 명령이 실패했습니다. 저장소를 확인하고 다시 시도하세요.",
+      gitTimeout: "Git이 제때 응답하지 않았습니다. 다시 시도하세요.",
     },
   },
   app: {

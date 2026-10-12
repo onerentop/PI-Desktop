@@ -553,9 +553,17 @@ pub async fn merge_session(
         Err(error) if error.code == "WORKTREE_CONFLICT" => Some(WorktreeStatus::Conflict),
         _ => None,
     };
-    if let Some(status) = status {
-        let st = state.lock().await;
-        registry::set_status(&st.db, &target.row.id, status)?;
+    match status {
+        Some(status) => {
+            let st = state.lock().await;
+            registry::set_status(&st.db, &target.row.id, status)?;
+        }
+        // A failure after the resolution was concluded (for example a dirty
+        // project) must not leave a stale conflict badge.
+        None if result.is_err() => {
+            refresh_conflict_status(state, git, session_id).await;
+        }
+        None => {}
     }
     result
 }
@@ -568,19 +576,36 @@ pub async fn behind_session(
     session_id: &str,
 ) -> Result<u64, WorktreeError> {
     let target = merge_target(state, session_id).await?;
+    // Opening the menu also picks up a conflict resolved outside the app.
+    refresh_conflict_status(state, git, session_id).await;
     merge::commits_behind(git, &target.row).await
+}
+
+/// How many sessions `behind_all` checks at once.
+const BEHIND_CONCURRENCY: usize = 8;
+
+/// Result of `behind_all`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BehindCounts {
+    pub counts: HashMap<String, u64>,
+    /// A conflict badge was cleared (resolved outside the app), so the
+    /// renderer should refresh its session list.
+    pub statuses_changed: bool,
 }
 
 /// Project commits each isolated session lacks, keyed by session id, for the
 /// sidebar's "behind" marker. Sessions whose count cannot be read (missing
-/// folder, owner branch gone) are left out. Runs git outside the state lock;
-/// the renderer calls it in the background, never while rendering the list.
+/// folder, owner branch gone) are left out. Conflicted sessions are checked
+/// for a resolution first. Runs git outside the state lock, a few sessions at
+/// a time; the renderer calls it in the background, never while rendering.
 pub async fn behind_all(
     state: &SharedState,
     git: &GitRunner,
-) -> Result<HashMap<String, u64>, WorktreeError> {
+) -> Result<BehindCounts, WorktreeError> {
     let rows = registry::all(&state.lock().await.db)?;
-    let mut counts = HashMap::new();
+    let limit = Arc::new(tokio::sync::Semaphore::new(BEHIND_CONCURRENCY));
+    let mut tasks = tokio::task::JoinSet::new();
     for row in rows {
         let Some(session_id) = row.session_id.clone() else {
             continue;
@@ -594,11 +619,26 @@ pub async fn behind_all(
         {
             continue;
         }
-        if let Ok(count) = merge::commits_behind(git, &row).await {
-            counts.insert(session_id, count);
+        let (state, git, limit) = (state.clone(), git.clone(), limit.clone());
+        tasks.spawn(async move {
+            let _slot = limit.acquire_owned().await.ok();
+            let cleared = row.status == WorktreeStatus::Conflict
+                && refresh_conflict_status(&state, &git, &session_id).await;
+            let count = merge::commits_behind(&git, &row).await.ok();
+            (session_id, count, cleared)
+        });
+    }
+    let mut result = BehindCounts::default();
+    while let Some(joined) = tasks.join_next().await {
+        let Ok((session_id, count, cleared)) = joined else {
+            continue;
+        };
+        result.statuses_changed |= cleared;
+        if let Some(count) = count {
+            result.counts.insert(session_id, count);
         }
     }
-    Ok(counts)
+    Ok(result)
 }
 
 /// "Sync from project" (ADR 0326): merge the project's branch into the
@@ -618,7 +658,10 @@ pub async fn sync_session(
     let status = match &result {
         Ok(_) => WorktreeStatus::Active,
         Err(error) if error.code == "WORKTREE_CONFLICT" => WorktreeStatus::Conflict,
-        Err(_) => return result,
+        Err(_) => {
+            refresh_conflict_status(state, git, session_id).await;
+            return result;
+        }
     };
     let st = state.lock().await;
     registry::set_status(&st.db, &target.row.id, status)?;
@@ -630,13 +673,19 @@ pub async fn sync_session(
 /// on "Merge into project") or abandoned the merge. Cheap for every other
 /// session: one registry read, no git. Failures only log; the badge then
 /// stays until the next merge attempt.
-pub async fn refresh_conflict_status(state: &SharedState, git: &GitRunner, session_id: &str) {
+///
+/// Returns whether the status was cleared.
+pub async fn refresh_conflict_status(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> bool {
     let row = match registry::for_owner(&state.lock().await.db, session_id, None) {
         Ok(Some(row)) if row.status == WorktreeStatus::Conflict => row,
-        Ok(_) => return,
+        Ok(_) => return false,
         Err(error) => {
             tracing::warn!(%error, "could not read the worktree registry");
-            return;
+            return false;
         }
     };
     let root = Path::new(&row.path);
@@ -650,13 +699,18 @@ pub async fn refresh_conflict_status(state: &SharedState, git: &GitRunner, sessi
     match settled {
         Ok(true) => {
             let st = state.lock().await;
-            if let Err(error) = registry::set_status(&st.db, &row.id, WorktreeStatus::Active) {
-                tracing::warn!(%error, "could not clear the worktree conflict status");
+            match registry::set_status(&st.db, &row.id, WorktreeStatus::Active) {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::warn!(%error, "could not clear the worktree conflict status");
+                    false
+                }
             }
         }
-        Ok(false) => {}
+        Ok(false) => false,
         Err(error) => {
-            tracing::warn!(%error, path = %row.path, "could not check worktree conflicts")
+            tracing::warn!(%error, path = %row.path, "could not check worktree conflicts");
+            false
         }
     }
 }
@@ -687,19 +741,23 @@ pub(super) async fn unmerged_commits(
     {
         Ok(count) => count,
         Err(_) => {
-            let exclude = format!("--exclude={}", row.branch);
-            git.run_git_dir(
-                common_dir,
-                &[
-                    "rev-list",
-                    "--count",
-                    &branch,
-                    "--not",
-                    &exclude,
-                    "--branches",
-                ],
-            )
-            .await?
+            // Every branch of this session (its own and its subagents') goes
+            // away with it, so none of them may count as keeping the work.
+            let mut args = vec![
+                "rev-list".to_string(),
+                "--count".to_string(),
+                branch.clone(),
+                "--not".to_string(),
+            ];
+            args.push(format!("--exclude={}", row.branch));
+            if let Some(session_id) = row.session_id.as_deref() {
+                let session_branch = format!("{BRANCH_NAMESPACE}/{}", short_id(session_id));
+                args.push(format!("--exclude={session_branch}"));
+                args.push(format!("--exclude={session_branch}-*"));
+            }
+            args.push("--branches".to_string());
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            git.run_git_dir(common_dir, &args).await?
         }
     };
     count.trim().parse().map_err(|_| {
@@ -720,12 +778,11 @@ pub async fn pending_work(
     let rows = registry::for_session(&state.lock().await.db, session_id)?;
     let mut pending = PendingWork::default();
     for row in rows {
-        let root = Path::new(&row.path);
-        if !root.is_dir() {
-            continue;
-        }
+        // Counted from the repository, so a vanished folder whose branch
+        // still holds commits is still reported before it is deleted.
         pending.unmerged_commits += unmerged_commits(git, &row).await?;
-        if !merge::worktree_status(git, root).await?.is_empty() {
+        let root = Path::new(&row.path);
+        if root.is_dir() && !merge::worktree_status(git, root).await?.is_empty() {
             pending.uncommitted_changes = true;
         }
     }

@@ -90,8 +90,8 @@ pub(super) async fn handle(
             Ok(json!({ "commits": commits }))
         }
         "worktree.behindAll" => {
-            let counts = lifecycle::behind_all(state, &git).await.map_err(to_rpc)?;
-            Ok(json!({ "counts": counts }))
+            let behind = lifecycle::behind_all(state, &git).await.map_err(to_rpc)?;
+            Ok(json!(behind))
         }
         "worktree.sync" => {
             let session_id = str_param(&params, "sessionId")?;
