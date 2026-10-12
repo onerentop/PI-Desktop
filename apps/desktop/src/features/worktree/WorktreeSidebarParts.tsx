@@ -21,10 +21,18 @@ import {
   syncIsolatedSession,
   worktreeErrorMessage,
 } from "./worktree-actions";
+import { WorktreeBehindMarker } from "./WorktreeBehind";
 import { useWorktreeUi } from "./worktree-ui-store";
 
 /** Session-row badge for an isolated session (PRD R3). */
-export function WorktreeBadge({ worktree }: { worktree?: SessionWorktreeSummary }) {
+export function WorktreeBadge({
+  worktree,
+  sessionId,
+}: {
+  worktree?: SessionWorktreeSummary;
+  /** Shows the "behind the project" marker when given. */
+  sessionId?: string;
+}) {
   const { t } = useTranslation();
   if (!worktree) return null;
   const [tone, label] =
@@ -36,13 +44,16 @@ export function WorktreeBadge({ worktree }: { worktree?: SessionWorktreeSummary 
           ? (["warning", t("worktree.badge.setupFailed")] as const)
           : (["neutral", t("worktree.badge.isolated")] as const);
   return (
-    <span
-      className="thread-item-worktree"
-      title={t("worktree.badge.title", { branch: worktree.branch })}
-      data-worktree-status={worktree.status}
-    >
-      <Badge tone={tone}>{label}</Badge>
-    </span>
+    <>
+      <span
+        className="thread-item-worktree"
+        title={t("worktree.badge.title", { branch: worktree.branch })}
+        data-worktree-status={worktree.status}
+      >
+        <Badge tone={tone}>{label}</Badge>
+      </span>
+      {sessionId && worktree.status !== "missing" ? <WorktreeBehindMarker sessionId={sessionId} /> : null}
+    </>
   );
 }
 
@@ -139,7 +150,11 @@ export function WorktreeSessionMenuItems({
     setBehind(null);
     api
       .getWorktreeBehind(sessionId)
-      .then((count) => current && setBehind(count))
+      .then((count) => {
+        if (!current) return;
+        setBehind(count);
+        useWorktreeUi.getState().setBehindFor(sessionId, count);
+      })
       .catch(() => current && setBehind(-1));
     return () => {
       current = false;

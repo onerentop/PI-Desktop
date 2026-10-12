@@ -10,6 +10,8 @@ export const en = {
       missing: "Folder missing",
       setupFailed: "Setup failed",
       title: "Runs in its own git worktree on {{branch}}",
+      behind: "↓{{count}}",
+      behindTitle: "The project has {{count}} new commit(s). Use \"Sync from project\" to bring them into this session.",
     },
     merge: {
       menu: "Merge into project…",

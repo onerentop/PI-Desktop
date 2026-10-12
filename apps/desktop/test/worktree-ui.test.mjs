@@ -32,6 +32,8 @@ before(async () => {
     parts: await server.ssrLoadModule("/src/features/worktree/WorktreeSidebarParts.tsx"),
     actions: await server.ssrLoadModule("/src/features/worktree/worktree-actions.ts"),
     store: await server.ssrLoadModule("/src/stores/app-store.ts"),
+    behind: await server.ssrLoadModule("/src/features/worktree/WorktreeBehind.tsx"),
+    worktreeUi: await server.ssrLoadModule("/src/features/worktree/worktree-ui-store.ts"),
   };
   // Same interpolation setting as the app (main.tsx): React escapes output.
   await i18n.init({
@@ -291,4 +293,36 @@ test("syncing from the project reports new commits, an up-to-date session, and c
   ]);
   // The badge follows: the list is refreshed after every attempt.
   assert.equal(refreshed, 3);
+});
+
+test("the behind marker shows only for sessions that lack project commits", () => {
+  const { WorktreeBadge } = modules.parts;
+  const { isolatedSessionsKey } = modules.behind;
+  const { useWorktreeUi } = modules.worktreeUi;
+  const active = { branch: "pi-desktop/a", status: "active", setupStatus: "none" };
+  // Server rendering reads the store's initial state (as the sidebar test does).
+  Object.assign(useWorktreeUi.getInitialState(), { behind: { s1: 3, s2: 0 } });
+
+  const behind = wrap(createElement(WorktreeBadge, { worktree: active, sessionId: "s1" }));
+  assert.match(behind, /data-worktree-behind="3"/);
+  assert.ok(behind.includes(i18n.t("worktree.badge.behind", { count: 3 })));
+  assert.ok(behind.includes(i18n.t("worktree.badge.behindTitle", { count: 3 }).replaceAll('"', "&quot;")));
+  assert.doesNotMatch(wrap(createElement(WorktreeBadge, { worktree: active, sessionId: "s2" })), /data-worktree-behind/);
+  assert.doesNotMatch(wrap(createElement(WorktreeBadge, { worktree: active })), /data-worktree-behind/);
+  assert.doesNotMatch(
+    wrap(createElement(WorktreeBadge, { worktree: { ...active, status: "missing" }, sessionId: "s1" })),
+    /data-worktree-behind/,
+  );
+
+  // The counts are re-read when an isolated session appears, changes status,
+  // or finishes a turn; ordinary sessions never trigger it.
+  const at = "2020-01-01T00:00:00Z";
+  const plain = { id: "p", updatedAt: at };
+  const isolated = { id: "s1", updatedAt: at, worktree: active };
+  const base = isolatedSessionsKey([plain, isolated]);
+  assert.equal(isolatedSessionsKey([isolated]), base);
+  assert.equal(isolatedSessionsKey([plain]), "");
+  assert.notEqual(isolatedSessionsKey([{ ...isolated, updatedAt: "2020-01-02T00:00:00Z" }]), base);
+  assert.notEqual(isolatedSessionsKey([{ ...isolated, worktree: { ...active, status: "merged" } }]), base);
+  assert.equal(isolatedSessionsKey([{ ...isolated, worktree: { ...active, status: "missing" } }]), "");
 });

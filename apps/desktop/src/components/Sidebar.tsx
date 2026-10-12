@@ -79,6 +79,7 @@ import {
   WorktreeProjectMenuItems,
   WorktreeSessionMenuItems,
 } from "../features/worktree/WorktreeSidebarParts";
+import { WorktreeBehindWatcher } from "../features/worktree/WorktreeBehind";
 import { useArmedDelete } from "../hooks/use-armed-delete";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
@@ -1812,7 +1813,7 @@ export function Sidebar({
             <span className="thread-item-source" title="Native Pi session">Pi</span>
           ) : null}
           {isRemoteSession(session) && <span className="thread-item-source" title={session.remoteHostLabel}>{t("remote:remote")}</span>}
-          <WorktreeBadge worktree={session.worktree} />
+          <WorktreeBadge worktree={session.worktree} sessionId={session.id} />
           <span className="thread-item-title">{taskTitle(session.title)}</span>
           {options?.global ? (
             <span className="thread-item-project">
@@ -2637,6 +2638,7 @@ export function Sidebar({
         />
       ) : null}
       <WorktreeDialogs />
+      <WorktreeBehindWatcher />
       {renameFor ? (
         <SessionRenameDialog
           session={renameFor}

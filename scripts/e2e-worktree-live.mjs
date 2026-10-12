@@ -228,6 +228,8 @@ try {
   const mergedA = await merge(a);
   record("merge-a", mergedA.outcome?.result === "merged" && firstLine(join(project, "f.txt")) === "A" &&
     read(join(project, "a.txt"))?.trim() === "from-a");
+  const { counts } = await host.call("worktree.behindAll", {});
+  record("behind-marker-after-merge", counts[b.sessionId] >= 1 && counts[a.sessionId] === 0, JSON.stringify(counts));
   let conflict;
   try {
     await merge(b);

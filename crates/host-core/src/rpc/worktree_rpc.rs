@@ -89,6 +89,10 @@ pub(super) async fn handle(
                 .map_err(to_rpc)?;
             Ok(json!({ "commits": commits }))
         }
+        "worktree.behindAll" => {
+            let counts = lifecycle::behind_all(state, &git).await.map_err(to_rpc)?;
+            Ok(json!({ "counts": counts }))
+        }
         "worktree.sync" => {
             let session_id = str_param(&params, "sessionId")?;
             let outcome = lifecycle::sync_session(state, &git, session_id)

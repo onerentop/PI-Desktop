@@ -571,6 +571,36 @@ pub async fn behind_session(
     merge::commits_behind(git, &target.row).await
 }
 
+/// Project commits each isolated session lacks, keyed by session id, for the
+/// sidebar's "behind" marker. Sessions whose count cannot be read (missing
+/// folder, owner branch gone) are left out. Runs git outside the state lock;
+/// the renderer calls it in the background, never while rendering the list.
+pub async fn behind_all(
+    state: &SharedState,
+    git: &GitRunner,
+) -> Result<HashMap<String, u64>, WorktreeError> {
+    let rows = registry::all(&state.lock().await.db)?;
+    let mut counts = HashMap::new();
+    for row in rows {
+        let Some(session_id) = row.session_id.clone() else {
+            continue;
+        };
+        if row.delegation_id.is_some()
+            || matches!(
+                row.status,
+                WorktreeStatus::Missing | WorktreeStatus::Creating
+            )
+            || !Path::new(&row.path).is_dir()
+        {
+            continue;
+        }
+        if let Ok(count) = merge::commits_behind(git, &row).await {
+            counts.insert(session_id, count);
+        }
+    }
+    Ok(counts)
+}
+
 /// "Sync from project" (ADR 0326): merge the project's branch into the
 /// session's worktree so the session continues on current code. The project
 /// checkout is never touched; a conflict stays in the worktree and marks the

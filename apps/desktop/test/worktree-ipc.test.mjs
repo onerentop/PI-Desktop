@@ -110,3 +110,9 @@ test("sync from project forwards the session and unwraps the count and outcome",
     { method: "worktree.sync", params: { sessionId: "s1" } },
   ]);
 });
+
+test("behind counts for the sidebar come back as a plain map", async () => {
+  const { invoke, calls } = setup({ "worktree.behindAll": { counts: { s1: 2, s2: 0 } } });
+  assert.deepEqual(await invoke(IPC.invoke.worktreeBehindAll), { s1: 2, s2: 0 });
+  assert.deepEqual(calls, [{ method: "worktree.behindAll", params: {} }]);
+});

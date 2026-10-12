@@ -1418,7 +1418,8 @@ Thin forwards to the host `worktree.*` methods
   sessions, with the refusal code, or whether it has uncommitted changes
 - `worktree/preview({ sessionId })` / `worktree/merge({ sessionId, previewToken })`
 - `worktree/behind({ sessionId })` → commit count, and
-  `worktree/sync({ sessionId })` — "Sync from project"
+  `worktree/sync({ sessionId })` — "Sync from project"; `worktree/behindAll()`
+  → `{ [sessionId]: count }` for the sidebar marker
 - `worktree/pendingWork({ sessionId })` — unmerged work a delete discards
 - `worktree/setupLog({ sessionId })`
 - `worktree/reveal({ sessionId })` — Electron Main resolves the folder with

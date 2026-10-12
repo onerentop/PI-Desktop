@@ -12,6 +12,8 @@ export const zhCN = {
       missing: "文件夹缺失",
       setupFailed: "初始化失败",
       title: "在独立的 git worktree 中运行，分支 {{branch}}",
+      behind: "↓{{count}}",
+      behindTitle: "项目有 {{count}} 个新提交，可用“从项目同步”带入此会话。",
     },
     merge: {
       menu: "合并到项目…",

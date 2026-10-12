@@ -144,6 +144,8 @@ export const IPC = {
     /** "Sync from project": project commits the session lacks, and the sync. */
     worktreeBehind: "pi-desktop/worktree/behind",
     worktreeSync: "pi-desktop/worktree/sync",
+    /** Behind counts of every isolated session, for the sidebar marker. */
+    worktreeBehindAll: "pi-desktop/worktree/behindAll",
     worktreeSetupLog: "pi-desktop/worktree/setupLog",
     /** Opens the worktree folder in the OS file manager; no path is returned. */
     worktreeReveal: "pi-desktop/worktree/reveal",

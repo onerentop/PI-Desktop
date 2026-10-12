@@ -12,6 +12,8 @@ export const ko = {
       missing: "폴더 없음",
       setupFailed: "설정 실패",
       title: "{{branch}} 브랜치의 별도 git worktree에서 실행됩니다",
+      behind: "↓{{count}}",
+      behindTitle: "프로젝트에 새 커밋이 {{count}}개 있습니다. '프로젝트에서 동기화'로 이 세션에 가져오세요.",
     },
     merge: {
       menu: "프로젝트에 병합…",

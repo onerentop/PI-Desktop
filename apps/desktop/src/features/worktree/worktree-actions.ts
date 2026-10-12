@@ -2,6 +2,7 @@ import { WorktreeErrorCodes, type WorktreeProbeResult } from "@pi-desktop/shared
 import type { TFunction } from "i18next";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
+import { useWorktreeUi } from "./worktree-ui-store";
 
 /** Catalog keys for the `WORKTREE_*` codes a user can act on. */
 const ERROR_KEYS: Record<string, string> = {
@@ -109,6 +110,7 @@ export async function syncIsolatedSession(sessionId: string, t: TFunction): Prom
     );
   } finally {
     void refreshSessions();
+    useWorktreeUi.getState().refreshBehind();
   }
 }
 

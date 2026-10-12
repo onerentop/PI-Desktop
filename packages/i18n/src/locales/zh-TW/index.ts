@@ -12,6 +12,8 @@ export const zhTW = {
       missing: "資料夾遺失",
       setupFailed: "初始化失敗",
       title: "在獨立的 git worktree 中執行，分支 {{branch}}",
+      behind: "↓{{count}}",
+      behindTitle: "專案有 {{count}} 個新提交，可用「從專案同步」帶入此工作階段。",
     },
     merge: {
       menu: "合併到專案…",

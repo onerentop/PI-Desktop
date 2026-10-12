@@ -247,7 +247,10 @@ destination, chat as the home surface, tools and permissions inline.
   **Sync from project** (labelled with the number of new project commits
   when the menu opens, disabled when there are none; it merges the project's
   branch into the session so the session continues on current code, and a
-  conflict stays in the session like a merge conflict), **Show worktree folder**, and **Setup log**.
+  conflict stays in the session like a merge conflict; a row that lacks project
+  commits shows a `↓N` marker next to its badge, read in the background when
+  isolated sessions change, after a merge or sync, and on window focus at most
+  every 15 seconds, so rendering the list never waits for git), **Show worktree folder**, and **Setup log**.
   Its delete confirmation states that unmerged work will be lost. Isolated
   sessions are never reused as the empty draft and cannot move to another
   project; forks are ordinary sessions.

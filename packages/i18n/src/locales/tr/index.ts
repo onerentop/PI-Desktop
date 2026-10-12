@@ -12,6 +12,8 @@ export const tr = {
       missing: "Klasör yok",
       setupFailed: "Hazırlık başarısız",
       title: "{{branch}} üzerinde kendi git worktree'sinde çalışır",
+      behind: "↓{{count}}",
+      behindTitle: "Projede {{count}} yeni commit var. Bunları bu oturuma almak için \"Projeden eşitle\" seçeneğini kullanın.",
     },
     merge: {
       menu: "Projeye birleştir…",

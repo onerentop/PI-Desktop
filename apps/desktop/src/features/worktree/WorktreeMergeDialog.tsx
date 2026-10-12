@@ -5,6 +5,7 @@ import { Button } from "../../components/ui";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
 import { WorktreeDialogFrame } from "./WorktreeDialogFrame";
+import { useWorktreeUi } from "./worktree-ui-store";
 import { mergeFailureState, worktreeErrorMessage } from "./worktree-actions";
 
 type State =
@@ -68,6 +69,8 @@ export function WorktreeMergeDialog({
         { variant: outcome.result === "merged" ? "success" : "info" },
       );
       void refreshSessions();
+      // Other sessions of the project are now behind it.
+      useWorktreeUi.getState().refreshBehind();
       onClose();
     } catch (error) {
       if (!alive.current) return;

@@ -20,7 +20,8 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
 import { IPC } from "@pi-desktop/shared";
-import { WorktreeProjectMenuItems, WorktreeSessionMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
+import { WorktreeBadge, WorktreeProjectMenuItems, WorktreeSessionMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
+import { WorktreeBehindWatcher } from "../../apps/desktop/src/features/worktree/WorktreeBehind";
 import { WorktreeMergeDialog } from "../../apps/desktop/src/features/worktree/WorktreeMergeDialog";
 import { useAppStore } from "../../apps/desktop/src/stores/app-store";
 
@@ -35,12 +36,19 @@ const probes = {
 const pending = [];
 const behind = { stale: 2, current: 0 };
 const synced = [];
+let behindAllCalls = 0;
 window.piDesktop = { platform: "linux", on() { return () => {}; },
   invoke(channel, payload) {
     if (channel === IPC.invoke.worktreeBehind) return Promise.resolve({ ok: true, data: behind[payload.sessionId] });
+    if (channel === IPC.invoke.worktreeBehindAll) {
+      behindAllCalls += 1;
+      return Promise.resolve({ ok: true, data: { ...behind } });
+    }
     if (channel === IPC.invoke.worktreeSync) {
       synced.push(payload.sessionId);
-      return Promise.resolve({ ok: true, data: { result: "synced", commits: behind[payload.sessionId] } });
+      const commits = behind[payload.sessionId];
+      behind[payload.sessionId] = 0;
+      return Promise.resolve({ ok: true, data: { result: "synced", commits } });
     }
     if (channel === IPC.invoke.worktreePreview) {
       return Promise.resolve({ ok: true, data: { branch: "pi-desktop/s1", ownerBranch: "main",
@@ -105,6 +113,26 @@ window.menuProbe = async () => {
   check(document.body.textContent.includes("f.txt"), "preview files not shown");
   flushSync(() => dialogRoot.unmount());
 
+  // The sidebar marker: the watcher reads every session's count in the
+  // background, the badge shows it, and a sync clears it.
+  const at = "2020-01-01T00:00:00Z";
+  const worktreeOf = (id) => ({ branch: "pi-desktop/" + id, status: "active", setupStatus: "none" });
+  useAppStore.setState({ sessions: [
+    { id: "stale", title: "Stale", createdAt: at, updatedAt: at, worktree: worktreeOf("stale") },
+    { id: "current", title: "Current", createdAt: at, updatedAt: at, worktree: worktreeOf("current") },
+  ] });
+  const sidebarRoot = document.createElement("div");
+  document.body.appendChild(sidebarRoot);
+  const rows = createRoot(sidebarRoot);
+  flushSync(() => rows.render(React.createElement(React.StrictMode, null,
+    React.createElement(WorktreeBehindWatcher),
+    React.createElement("div", { "data-row": "stale" }, React.createElement(WorktreeBadge, { sessionId: "stale", worktree: worktreeOf("stale") })),
+    React.createElement("div", { "data-row": "current" }, React.createElement(WorktreeBadge, { sessionId: "current", worktree: worktreeOf("current") })))));
+  await settle();
+  const marker = (id) => sidebarRoot.querySelector('[data-row="' + id + '"] [data-worktree-behind]');
+  check(marker("stale")?.textContent === i18n.t("worktree.badge.behind", { count: 2 }), "stale session has no behind marker");
+  check(!marker("current"), "an up-to-date session must have no marker");
+
   // "Sync from project" shows how far behind the session is and syncs it.
   const menuRoot = createRoot(document.getElementById("root"));
   const sessionMenu = (sessionId) => flushSync(() => menuRoot.render(React.createElement(React.StrictMode, null,
@@ -123,12 +151,16 @@ window.menuProbe = async () => {
   await settle();
   check(JSON.stringify(synced) === JSON.stringify(["stale"]), "sync not requested: " + JSON.stringify(synced));
   check(toasts[0] === i18n.t("worktree.sync.success", { count: 2 }), "missing sync toast: " + JSON.stringify(toasts));
+  await settle();
+  check(behindAllCalls >= 2, "a sync must re-read the counts");
+  check(!marker("stale"), "the marker must clear after the sync");
   flushSync(() => menuRoot.unmount());
+  flushSync(() => rows.unmount());
   return { passed: true };
 };
 `;
 
-test("the project menu greys out isolated sessions with the reason, and the merge preview loads", {
+test("isolated-session sidebar: unavailable reason, merge preview, behind marker, and sync from project", {
   skip: process.platform === "linux" && !process.env.DISPLAY ? "Electron requires a display" : false,
 }, async () => {
   const temp = await mkdtemp(join(root, "apps/desktop/.worktree-menu-ui-"));

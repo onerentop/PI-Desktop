@@ -12,6 +12,8 @@ export const es = {
       "missing": "Falta la carpeta",
       "setupFailed": "Falló la preparación",
       "title": "Se ejecuta en su propio worktree de git en {{branch}}",
+      "behind": "↓{{count}}",
+      "behindTitle": "El proyecto tiene {{count}} commit(s) nuevo(s). Usa «Sincronizar desde el proyecto» para traerlos a esta sesión.",
     },
     "merge": {
       "menu": "Fusionar en el proyecto…",

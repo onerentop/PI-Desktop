@@ -72,6 +72,11 @@ export function registerWorktreeIpc({
     return result.commits;
   });
 
+  registrar.handle(IPC.invoke.worktreeBehindAll, async () => {
+    const result = await host().call<{ counts: Record<string, number> }>("worktree.behindAll", {});
+    return result.counts;
+  });
+
   registrar.handle(IPC.invoke.worktreeSync, async (input: unknown) => {
     const sessionId = requiredText(input, "sessionId");
     const result = await host().call<{ outcome: unknown }>("worktree.sync", { sessionId });

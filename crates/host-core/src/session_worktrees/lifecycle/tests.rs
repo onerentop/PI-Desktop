@@ -594,3 +594,32 @@ async fn a_sync_conflict_stays_in_the_session() {
     assert_eq!(status(&env), WorktreeStatus::Active);
     assert_eq!(fs::read_to_string(root.join("f.txt")).unwrap(), "both\n");
 }
+
+/// The sidebar marker: after one session merges, the other is behind and the
+/// merged one is not; a vanished worktree is left out.
+#[tokio::test]
+async fn behind_all_counts_what_each_session_lacks() {
+    let env = env();
+    let (one, _c1, root1) = isolated(&env).await;
+    let (two, _c2, _root2) = isolated(&env).await;
+    let (gone, _c3, root3) = isolated(&env).await;
+    let counts = behind_all(&env.state, &env.git).await.unwrap();
+    assert_eq!(counts.get(&one), Some(&0));
+    assert_eq!(counts.get(&two), Some(&0));
+
+    fs::write(root1.join("f.txt"), "A\n").unwrap();
+    let token = preview_session(&env.state, &env.git, &one)
+        .await
+        .unwrap()
+        .preview_token;
+    merge_session(&env.state, &env.git, &one, &token)
+        .await
+        .unwrap();
+    crate::session_worktrees::remove::clear_contents(&root3).unwrap();
+    fs::remove_dir_all(&root3).unwrap();
+
+    let counts = behind_all(&env.state, &env.git).await.unwrap();
+    assert_eq!(counts.get(&one), Some(&0));
+    assert_eq!(counts.get(&two), Some(&1));
+    assert!(!counts.contains_key(&gone));
+}

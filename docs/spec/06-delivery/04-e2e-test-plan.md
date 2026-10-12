@@ -360,7 +360,8 @@
   first merge fast-forwards the project and a success toast names the branch.
   The conflicting merge lists the files, leaves the project untouched, and
   marks the row `Conflict`; after resolution the badge clears and the merge
-  lands. Sync from project shows the new commits and brings the resolution
+  lands. The first session's row shows `↓N`; Sync from project shows the new
+  commits, clears the marker, and brings the resolution
   into the first session without touching the project. Writing
   subagents edit in separate worktrees and completed runs merge back into the
   session. Delete warns about unmerged work and removes the worktree folder

@@ -12,6 +12,8 @@ export const fr = {
       "missing": "Dossier manquant",
       "setupFailed": "Échec de la préparation",
       "title": "S'exécute dans son propre worktree git sur {{branch}}",
+      "behind": "↓{{count}}",
+      "behindTitle": "Le projet a {{count}} nouveau(x) commit(s). Utilisez « Synchroniser depuis le projet » pour les intégrer à cette session.",
     },
     "merge": {
       "menu": "Fusionner dans le projet…",

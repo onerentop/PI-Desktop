@@ -618,6 +618,9 @@ Additive `worktree.*` methods; no protocol version bump. Failures use code
   worktree conflicted and the project untouched.
 - `worktree.behind({ sessionId })` → `{ commits }`, project-branch commits the
   session does not have yet.
+- `worktree.behindAll()` → `{ counts }`, the same count for every isolated
+  session keyed by session id (sessions whose count cannot be read are
+  omitted); the renderer reads it in the background for the sidebar marker.
 - `worktree.sync({ sessionId })` → `{ outcome }` (`synced` with `commits`, or
   `upToDate`): "Sync from project" merges the project branch into the session
   worktree after committing pending session work. The project checkout is not

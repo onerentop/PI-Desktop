@@ -12,6 +12,8 @@ export const ptBR = {
       missing: "Pasta ausente",
       setupFailed: "Falha na preparação",
       title: "Executa no próprio worktree git em {{branch}}",
+      behind: "↓{{count}}",
+      behindTitle: "O projeto tem {{count}} commit(s) novo(s). Use “Sincronizar do projeto” para trazê-los a esta sessão.",
     },
     merge: {
       menu: "Mesclar no projeto…",
