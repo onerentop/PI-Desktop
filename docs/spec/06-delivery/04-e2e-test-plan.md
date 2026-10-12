@@ -374,8 +374,10 @@
 - **Coverage:** host-core `session_worktrees` tests (create, merge, conflict,
   removal, link safety, reconcile, delegates), worktree IPC contract tests,
   renderer `worktree-ui` tests, and agent-runtime delegate tests. The Windows
-  checks need a Windows host.
-- **Status:** Documented
+  checks need a Windows host. `pnpm test:e2e:worktree-live`
+  (`scripts/e2e-worktree-live.mjs`) runs the steps above against a real model
+  at protocol level, without the renderer.
+- **Status:** Partially automated
 
 ### E2E-CONVERSATION-minimap-jump-leaves-follow
 
