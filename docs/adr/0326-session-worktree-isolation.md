@@ -1,0 +1,100 @@
+# ADR 0326: Isolate parallel sessions of one project in git worktrees
+
+- Status: Accepted; implementation in progress
+- Date: 2026-10-12
+- Deciders: PI-Desktop maintainers
+- Related: ADR 0062 (parallel delegates), ADR 0089 (delegation tools),
+  D114 (per-session scratch), `docs/spec/03-runtime/03-tools-and-permissions.md` §4d
+
+## Context
+
+Several sessions of one project can run at the same time, but they all
+resolve the same tool root (`resolve_tool_workspace`, `crates/host-core/src/rpc/mod.rs`).
+Writes are serialized only per session; two sessions editing one file are
+guarded only by the Edit content tag, and they share one build tree and one
+git state. Subagents of one session share the same root as well.
+
+Every mainstream agent product that offers parallel local work isolates it in
+a git worktree: Claude Code (`--worktree`, subagent `isolation: worktree`),
+Cursor (Agents Window, `/worktree`), Codex (Local / Worktree with Handoff),
+VS Code (Agents window "New Worktree"), Windsurf / Devin Desktop, Conductor,
+and JetBrains IDEs. Four of the six desktop products place worktrees outside
+the project directory.
+
+## Decision
+
+1. An isolated session is opt-in per new session, default off. It owns one git
+   worktree on branch `pi-desktop/<id>`, created by host-core under
+   `~/.pi-desktop/worktrees/<project-key>/` from the project's current branch
+   tip. Uncommitted project changes are not carried over.
+2. host-core owns all git execution, worktree paths, and the `worktrees`
+   registry (schema v24). The renderer and the agent runtime send only a
+   session id and, for subagents, a delegation id; they never send a worktree
+   path.
+3. Tool containment is unchanged in mechanism: the isolated session's root is
+   its worktree (or `<worktree>/<prefix>` when the project is a repository
+   subdirectory), so the main checkout is "outside workspace" and needs the
+   existing permission. Project identity (skills, plugins, MCP, memory,
+   subagent catalog, group context) stays keyed by the project path; only
+   files, instruction files, and the shell run in the worktree.
+4. "Merge into project" preserves the session's commits. It first shows the
+   commit count and changed files for confirmation, then merges the project
+   branch into the session branch inside the worktree (conflicts stay there),
+   then fast-forwards the project branch. The project never enters a
+   merge-in-progress state and git refuses to overwrite uncommitted project
+   changes.
+5. Inside an isolated session, a subagent whose tools include Write or Edit
+   gets its own temporary worktree and is merged back automatically with the
+   same algorithm; a conflict is reported to the parent, which can resume the
+   subagent to resolve it. Other subagents share the session worktree.
+6. Deleting an isolated session removes its worktrees and branches after a
+   loss warning; there is no separate discard. Removal deletes links as links
+   before calling git, because Git for Windows follows directory junctions
+   during `git worktree remove --force` (openai/codex#34702, #49995).
+7. Every git command host-core runs disables hooks and `core.fsmonitor` and
+   sets `safe.bareRepository=explicit`. A relative `core.hooksPath` resolves
+   inside the worktree, so a hook written with Write/Edit alone would
+   otherwise run when host-core commits or merges, bypassing the Bash
+   permission.
+8. New worktrees copy ignored files listed in `.worktreeinclude` (the format
+   Claude Code and Conductor read), then run an optional per-project setup
+   command with `PI_PROJECT_ROOT`, `PI_WORKTREE_ROOT`, and `PI_PORT` (a block
+   of 10 ports per worktree, after Conductor's `CONDUCTOR_PORT`).
+9. Minimum git version is 2.29 (`git worktree repair`). Relative worktree
+   links are not used because they raise the repository format version.
+
+## Alternatives considered
+
+- Worktrees inside the project (`.pi/worktrees/`, Claude Code's choice):
+  rejected after verification; test runners (vitest default `exclude`),
+  `tsc` (default `include: **/*`), watchers, and `git clean -ffdx` see or
+  delete the copies.
+- Apply changes as uncommitted edits instead of merging the branch: rejected
+  by the user in favor of keeping history.
+- Merging directly in the project: rejected; a conflict would leave the
+  project half-merged.
+- No automatic subagent merge-back (Claude Code, VS Code, Codex): rejected by
+  the user in favor of zero-click integration, with serialization and a
+  no-force fallback as safeguards.
+- Per-project file locks without worktrees: rejected; it cannot isolate builds
+  or git state.
+
+## Consequences
+
+- Project history contains "Merge branch …" and checkpoint commits.
+- Automatic commits do not run the project's pre-commit hooks.
+- MCP stdio servers stay per project with the main checkout as cwd, so MCP
+  tools are not isolated.
+- Builds that reach outside the repository by relative path need links made
+  by the setup command.
+- Isolation is a development boundary, not a security boundary; Bash can
+  still reach the main checkout through absolute paths.
+
+## Validation
+
+host-core tests against real temporary git repositories cover creation,
+merge (including conflicts and dirty-project refusal), hook suppression,
+link-safe removal, orphan cleanup, `.worktreeinclude`, port assignment, and
+repository-subdirectory projects; runtime and renderer tests cover the
+user path. Windows junction removal, long paths, and locked-file removal
+require Windows E2E.

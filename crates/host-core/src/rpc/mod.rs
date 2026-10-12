@@ -3,6 +3,7 @@ mod scheduled_rpc;
 mod scheduled_tools;
 mod todos;
 mod window_corner_rpc;
+mod worktree_rpc;
 
 use std::io::{self, BufRead, BufReader as StdBufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -1270,6 +1271,13 @@ fn resolve_tool_workspace(
 ) -> Result<Option<String>, JsonRpcError> {
     match sessions::session_summary(&state.db, session_id) {
         Ok(Some(summary)) => {
+            // An isolated session's root is its worktree and never falls back
+            // to the main checkout (ADR 0326).
+            match crate::session_worktrees::lifecycle::tool_root(&state.db, session_id) {
+                Ok(Some(root)) => return Ok(Some(root.to_string_lossy().into_owned())),
+                Ok(None) => {}
+                Err(error) => return Err(worktree_rpc::to_rpc(error)),
+            }
             if let Some(project_path) = summary.project_path {
                 return Ok(Some(project_path));
             }
@@ -2436,6 +2444,28 @@ async fn handle_request(
         "session.create" => {
             let thinking_level = thinking_level_param(&params)?;
             let permission_parent = permission_parent_param(&params)?;
+            // ADR 0326: an isolated session gets its own git worktree.
+            let isolated = params
+                .get("isolated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let isolated_project = if isolated {
+                Some(
+                    params
+                        .get("projectPath")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            rpc_err(
+                                1002,
+                                "an isolated session needs a projectPath",
+                                "INVALID_PARAMS",
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
             let st = state.lock().await;
             let permission_mode = if let Some(parent_id) = permission_parent {
                 Some(
@@ -2474,7 +2504,16 @@ async fn handle_request(
                 },
             )
             .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
-            Ok(json!({ "session": session }))
+            drop(st);
+            let Some(project) = isolated_project else {
+                return Ok(json!({ "session": session }));
+            };
+            let created = worktree_rpc::isolate_new_session(&state, &session.id, &project).await?;
+            let st = state.lock().await;
+            let session = sessions::session_summary(&st.db, &session.id)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                .ok_or_else(|| rpc_err(1007, "session not found", "NOT_FOUND"))?;
+            Ok(json!({ "session": session, "worktree": created }))
         }
         "session.fork" => {
             let session_id = params
@@ -2512,6 +2551,18 @@ async fn handle_request(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| rpc_err(1002, "projectPath required", "INVALID_PARAMS"))?;
             let st = state.lock().await;
+            // An isolated session's worktree belongs to its project's repository.
+            let isolated = crate::session_worktrees::registry::for_owner(&st.db, session_id, None)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                .is_some();
+            if isolated {
+                return Err(worktree_rpc::to_rpc(
+                    crate::session_worktrees::WorktreeError::new(
+                        "WORKTREE_MOVE_UNSUPPORTED",
+                        "an isolated session cannot move to another project",
+                    ),
+                ));
+            }
             let session = match sessions::move_session_project(&st.db, session_id, project_path)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
             {
@@ -2621,12 +2672,17 @@ async fn handle_request(
                 .get("id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
+            // Delete = discard for isolated sessions (ADR 0326); a git failure
+            // keeps the session.
+            worktree_rpc::remove_before_delete(&state, id).await?;
             let st = state.lock().await;
             let ok = sessions::delete_session(&st.db, id)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             if ok {
                 drop_session_side_data(&st, id);
             }
+            drop(st);
+            worktree_rpc::spawn_orphan_cleanup(&state);
             Ok(json!({ "ok": ok }))
         }
         "session.rename" => {
@@ -3620,6 +3676,10 @@ async fn handle_request(
             scheduled_rpc::handle(&st, method, params)
         }
 
+        method if method.starts_with("worktree.") => {
+            worktree_rpc::handle(&state, method, params).await
+        }
+
         "tools.list" => {
             let mut definitions = tools::builtin_tool_defs();
             if let Some(items) = definitions.as_array_mut() {
@@ -4026,9 +4086,13 @@ async fn handle_request(
                 };
 
                 let ws_path = workspace_path.map(PathBuf::from);
-                let (data_dir, hashline_store) = {
+                let (data_dir, hashline_store, worktree_env) = {
                     let st = state.lock().await;
-                    (st.data_dir.clone(), st.hashline.clone())
+                    (
+                        st.data_dir.clone(),
+                        st.hashline.clone(),
+                        crate::session_worktrees::lifecycle::tool_env(&st.db, &p.session_id),
+                    )
                 };
                 let hashline_ctx = tools::HashlineContext {
                     session_id: p.session_id.as_str(),
@@ -4103,6 +4167,7 @@ async fn handle_request(
                         timeout_ms: execution_timeout_ms,
                         cancellation,
                         output_tx: Some(tx.clone()),
+                        extra_env: worktree_env.clone(),
                     });
                 }
 

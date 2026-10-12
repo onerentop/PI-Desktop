@@ -1,0 +1,637 @@
+//! Isolated-session worktree lifecycle (ADR 0326): create, resolve, merge,
+//! remove, orphan cleanup, and startup reconciliation.
+//!
+//! The global `AppState` lock is held only for short registry reads and
+//! writes, never across a git command or the setup command.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::Result;
+use rusqlite::params;
+use serde::Serialize;
+use serde_json::json;
+use tokio::sync::Mutex;
+
+use super::git::GitRunner;
+use super::include::{copy_included, IncludeReport};
+use super::merge::{self, MergeOutcome, MergePreview};
+use super::probe::{probe, BRANCH_NAMESPACE};
+use super::registry::{self, NewWorktree, SetupStatus, WorktreeRow, WorktreeStatus};
+use super::remove::remove_worktree;
+use super::{fnv1a64, repo_lock, WorktreeError};
+use crate::db::Database;
+use crate::sessions;
+use crate::state::AppState;
+
+pub type SharedState = Arc<Mutex<AppState>>;
+
+/// Bound for the per-project setup command (dependency installs can be slow).
+pub const SETUP_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+const SETUP_LOG_LIMIT: usize = 16 * 1024;
+
+/// What the renderer needs to badge a session row; no filesystem paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSummary {
+    pub branch: String,
+    pub status: WorktreeStatus,
+    pub setup_status: Option<SetupStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedWorktree {
+    pub worktree: WorktreeSummary,
+    pub included: IncludeReport,
+    /// The main checkout had uncommitted changes that were not carried over.
+    pub project_had_uncommitted_changes: bool,
+}
+
+/// Unmerged work that deleting the session would lose (delete confirmation).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingWork {
+    pub unmerged_commits: u64,
+    pub uncommitted_changes: bool,
+}
+
+pub fn worktrees_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("worktrees")
+}
+
+/// `<sanitized repository name>-<hash of its canonical path>`: readable, and
+/// distinct for two repositories with the same folder name.
+fn project_key(toplevel: &Path) -> String {
+    let name: String = toplevel
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(24)
+        .collect();
+    let hash = fnv1a64(toplevel.to_string_lossy().as_bytes());
+    format!(
+        "{}-{:08x}",
+        if name.is_empty() { "repo" } else { &name },
+        hash as u32
+    )
+}
+
+fn short_id(id: &str) -> String {
+    id.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(12)
+        .collect()
+}
+
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+// ---- project setting --------------------------------------------------------
+
+pub fn setup_command(db: &Database, project_path: &str) -> Result<Option<String>> {
+    let path =
+        crate::db::canonical_project_path(project_path).unwrap_or_else(|| project_path.to_string());
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT worktree_setup_command FROM projects WHERE path = ?1",
+            params![path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .filter(|command| !command.trim().is_empty()))
+}
+
+/// Returns false when the project is not registered.
+pub fn set_setup_command(db: &Database, project_path: &str, command: Option<&str>) -> Result<bool> {
+    let path =
+        crate::db::canonical_project_path(project_path).unwrap_or_else(|| project_path.to_string());
+    let command = command.map(str::trim).filter(|command| !command.is_empty());
+    Ok(db.conn().execute(
+        "UPDATE projects SET worktree_setup_command = ?2 WHERE path = ?1",
+        params![path, command],
+    )? > 0)
+}
+
+// ---- resolution (sync, called under the AppState lock) ----------------------
+
+fn own_row(db: &Database, session_id: &str) -> Result<Option<WorktreeRow>, WorktreeError> {
+    Ok(registry::for_owner(db, session_id, None)?)
+}
+
+/// The tool root of an isolated session, or `None` for every other session.
+/// An isolated session never falls back to the main checkout.
+pub fn tool_root(db: &Database, session_id: &str) -> Result<Option<PathBuf>, WorktreeError> {
+    let Some(row) = own_row(db, session_id)? else {
+        return Ok(None);
+    };
+    match row.status {
+        WorktreeStatus::Creating => Err(WorktreeError::new(
+            "WORKTREE_NOT_READY",
+            "the isolated worktree is still being created",
+        )),
+        WorktreeStatus::Missing => Err(missing_error()),
+        _ => {
+            let root = row.workspace_root();
+            if root.is_dir() {
+                Ok(Some(root))
+            } else {
+                Err(missing_error())
+            }
+        }
+    }
+}
+
+fn missing_error() -> WorktreeError {
+    WorktreeError::new(
+        "WORKTREE_MISSING",
+        "the isolated worktree folder no longer exists; delete this session",
+    )
+}
+
+/// `PI_PORT`, `PI_PROJECT_ROOT`, and `PI_WORKTREE_ROOT` for an isolated
+/// session's shell commands (PRD R2d); empty for every other session.
+pub fn tool_env(db: &Database, session_id: &str) -> Vec<(String, String)> {
+    let Ok(Some(row)) = own_row(db, session_id) else {
+        return Vec::new();
+    };
+    let project = sessions::session_summary(db, session_id)
+        .ok()
+        .flatten()
+        .and_then(|summary| summary.project_path);
+    env_for(&row, project.as_deref())
+}
+
+fn env_for(row: &WorktreeRow, project: Option<&str>) -> Vec<(String, String)> {
+    let mut env = vec![(
+        "PI_WORKTREE_ROOT".to_string(),
+        row.workspace_root().to_string_lossy().into_owned(),
+    )];
+    if let Some(project) = project {
+        env.push(("PI_PROJECT_ROOT".to_string(), project.to_string()));
+    }
+    if let Some(port) = row.port_base {
+        env.push(("PI_PORT".to_string(), port.to_string()));
+    }
+    env
+}
+
+/// Badges for the given sessions' own worktrees, keyed by session id.
+pub fn summaries(db: &Database) -> Result<HashMap<String, WorktreeSummary>> {
+    let mut statement = db.conn().prepare_cached(
+        "SELECT session_id, branch, status, setup_status FROM worktrees
+         WHERE session_id IS NOT NULL AND delegation_id IS NULL",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = HashMap::new();
+    for (session_id, branch, status, setup) in rows {
+        let Some(status) = parse_status(&status) else {
+            continue;
+        };
+        out.insert(
+            session_id,
+            WorktreeSummary {
+                branch,
+                status,
+                setup_status: setup.as_deref().and_then(parse_setup),
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn parse_status(value: &str) -> Option<WorktreeStatus> {
+    WorktreeStatus::parse(value).ok()
+}
+
+fn parse_setup(value: &str) -> Option<SetupStatus> {
+    SetupStatus::parse(value).ok()
+}
+
+fn summary_of(row: &WorktreeRow) -> WorktreeSummary {
+    WorktreeSummary {
+        branch: row.branch.clone(),
+        status: row.status,
+        setup_status: row.setup_status,
+    }
+}
+
+// ---- create -----------------------------------------------------------------
+
+/// Create the session's own worktree from the project's current branch tip,
+/// copy `.worktreeinclude` files, and start the optional setup command in the
+/// background. On failure nothing is left behind.
+pub async fn create_session_worktree(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+    project_path: &str,
+) -> Result<CreatedWorktree, WorktreeError> {
+    let project = Path::new(project_path);
+    let repo = probe(git, project).await?;
+    let project_had_uncommitted_changes = !merge::worktree_status(git, project).await?.is_empty();
+    let _guard = repo_lock::lock(&repo.common_dir).await;
+
+    let data_dir = state.lock().await.data_dir.clone();
+    let parent = worktrees_dir(&data_dir).join(project_key(&repo.toplevel));
+    std::fs::create_dir_all(&parent)?;
+    let parent = crate::workspace::simple_canonicalize(&parent)?;
+    let name = short_id(session_id);
+    let root = parent.join(&name);
+    if root.exists() {
+        return Err(WorktreeError::new(
+            "WORKTREE_PATH_EXISTS",
+            format!("{} already exists", root.display()),
+        ));
+    }
+    let branch = format!("{BRANCH_NAMESPACE}/{name}");
+    let root_text = root.to_string_lossy().into_owned();
+    let common_dir = repo.common_dir.to_string_lossy().into_owned();
+
+    let row = {
+        let st = state.lock().await;
+        let port = registry::next_port_base(&st.db, port_is_free)?;
+        registry::insert(
+            &st.db,
+            &NewWorktree {
+                session_id,
+                delegation_id: None,
+                path: &root_text,
+                common_dir: &common_dir,
+                prefix: &repo.prefix,
+                branch: &branch,
+                owner_branch: &repo.branch,
+                port_base: port,
+            },
+        )?
+    };
+
+    let created: Result<IncludeReport, WorktreeError> = async {
+        git.run(
+            project,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &branch,
+                &root_text,
+                &repo.branch,
+            ],
+        )
+        .await?;
+        git.run(
+            &root,
+            &[
+                "worktree",
+                "lock",
+                "--reason",
+                &format!("PI-Desktop session {session_id}"),
+                &root_text,
+            ],
+        )
+        .await?;
+        copy_included(git, &repo.toplevel, &root).await
+    }
+    .await;
+
+    let included = match created {
+        Ok(included) => included,
+        Err(error) => {
+            if let Err(cleanup) = remove_worktree(git, &row).await {
+                tracing::warn!(%cleanup, "could not clean up a failed worktree creation");
+            }
+            let st = state.lock().await;
+            let _ = registry::remove(&st.db, &row.id);
+            return Err(error);
+        }
+    };
+
+    let (row, command) = {
+        let st = state.lock().await;
+        registry::set_status(&st.db, &row.id, WorktreeStatus::Active)?;
+        let command = setup_command(&st.db, project_path)?;
+        let status = if command.is_some() {
+            SetupStatus::Running
+        } else {
+            SetupStatus::None
+        };
+        registry::set_setup_status(&st.db, &row.id, status, None)?;
+        let row = registry::get(&st.db, &row.id)?.unwrap_or(row);
+        (row, command)
+    };
+    if let Some(command) = command {
+        tokio::spawn(run_setup(
+            state.clone(),
+            row.clone(),
+            project_path.to_string(),
+            command,
+        ));
+    }
+    Ok(CreatedWorktree {
+        worktree: summary_of(&row),
+        included,
+        project_had_uncommitted_changes,
+    })
+}
+
+async fn run_setup(state: SharedState, row: WorktreeRow, project_path: String, command: String) {
+    let shell_id = {
+        let st = state.lock().await;
+        let configured = st
+            .db
+            .get_setting("app")
+            .ok()
+            .flatten()
+            .and_then(|settings| {
+                settings
+                    .get("defaultCommandShell")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            });
+        crate::tools::shell::catalog(configured.as_deref())
+            .effective
+            .map(|option| option.id)
+            .unwrap_or_else(|| crate::tools::shell::default_shell_id().to_string())
+    };
+    let root = row.workspace_root();
+    let result = crate::tools::execute_tool_with_path_access(
+        Some(&root),
+        None,
+        "Bash",
+        &json!({ "command": command }),
+        crate::tools::ToolExecutionOptions {
+            timeout_ms: Some(SETUP_TIMEOUT_MS),
+            bash_options: Some(crate::tools::BashExecutionOptions {
+                session_id: row.session_id.clone().unwrap_or_default(),
+                tool_call_id: format!("worktree-setup-{}", row.id),
+                command_shell_id: shell_id,
+                timeout_ms: Some(SETUP_TIMEOUT_MS),
+                cancellation: None,
+                output_tx: None,
+                extra_env: env_for(&row, Some(&project_path)),
+            }),
+            allow_external_paths: false,
+            hashline: None,
+        },
+    )
+    .await;
+    let log = setup_log(&result.content);
+    let status = if result.ok {
+        SetupStatus::Ok
+    } else {
+        SetupStatus::Failed
+    };
+    let st = state.lock().await;
+    if let Err(error) = registry::set_setup_status(&st.db, &row.id, status, Some(&log)) {
+        tracing::warn!(%error, "could not record the worktree setup result");
+    }
+}
+
+fn setup_log(content: &serde_json::Value) -> String {
+    let text = match content {
+        serde_json::Value::String(text) => text.clone(),
+        value => {
+            let stdout = value.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = value.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let exit = value
+                .get("exitCode")
+                .map(|code| code.to_string())
+                .unwrap_or_default();
+            format!(
+                "{stdout}{}{stderr}\n[exit {exit}]",
+                if stderr.is_empty() { "" } else { "\n" }
+            )
+        }
+    };
+    if text.len() <= SETUP_LOG_LIMIT {
+        return text;
+    }
+    let mut start = text.len() - SETUP_LOG_LIMIT;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("[earlier output omitted]\n{}", &text[start..])
+}
+
+// ---- merge ------------------------------------------------------------------
+
+struct MergeTarget {
+    row: WorktreeRow,
+    project_path: String,
+    title: String,
+}
+
+async fn merge_target(state: &SharedState, session_id: &str) -> Result<MergeTarget, WorktreeError> {
+    let st = state.lock().await;
+    let row = own_row(&st.db, session_id)?.ok_or_else(|| {
+        WorktreeError::new(
+            "WORKTREE_NOT_ISOLATED",
+            "the session has no isolated worktree",
+        )
+    })?;
+    if row.status == WorktreeStatus::Missing || !Path::new(&row.path).is_dir() {
+        return Err(missing_error());
+    }
+    let summary = sessions::session_summary(&st.db, session_id)?
+        .ok_or_else(|| WorktreeError::new("WORKTREE_NOT_ISOLATED", "session not found"))?;
+    let project_path = summary
+        .project_path
+        .ok_or_else(|| WorktreeError::new("WORKTREE_NOT_ISOLATED", "the session has no project"))?;
+    Ok(MergeTarget {
+        row,
+        project_path,
+        title: summary.title,
+    })
+}
+
+fn ensure_idle(db: &Database, session_id: &str) -> Result<(), WorktreeError> {
+    if sessions::session_has_running_turn(db, session_id)? {
+        return Err(WorktreeError::new(
+            "WORKTREE_BUSY",
+            "the session is running; wait for it to finish",
+        ));
+    }
+    Ok(())
+}
+
+pub async fn preview_session(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> Result<MergePreview, WorktreeError> {
+    let target = merge_target(state, session_id).await?;
+    merge::preview(git, &target.row).await
+}
+
+pub async fn merge_session(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+    preview_token: &str,
+) -> Result<MergeOutcome, WorktreeError> {
+    let target = merge_target(state, session_id).await?;
+    ensure_idle(&state.lock().await.db, session_id)?;
+    let _guard = repo_lock::lock(Path::new(&target.row.common_dir)).await;
+    let result = merge::merge(
+        git,
+        &target.row,
+        Path::new(&target.project_path),
+        &target.title,
+        preview_token,
+    )
+    .await;
+    let status = match &result {
+        Ok(MergeOutcome::Merged { .. }) => Some(WorktreeStatus::Merged),
+        Err(error) if error.code == "WORKTREE_CONFLICT" => Some(WorktreeStatus::Conflict),
+        _ => None,
+    };
+    if let Some(status) = status {
+        let st = state.lock().await;
+        registry::set_status(&st.db, &target.row.id, status)?;
+    }
+    result
+}
+
+// ---- remove -----------------------------------------------------------------
+
+/// Unmerged commits and uncommitted changes across every worktree of the
+/// session, for the delete confirmation.
+pub async fn pending_work(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> Result<PendingWork, WorktreeError> {
+    let rows = registry::for_session(&state.lock().await.db, session_id)?;
+    let mut pending = PendingWork::default();
+    for row in rows {
+        let root = Path::new(&row.path);
+        if !root.is_dir() {
+            continue;
+        }
+        let range = format!("{}..{}", row.owner_branch, row.branch);
+        if let Ok(count) = git.run(root, &["rev-list", "--count", &range]).await {
+            pending.unmerged_commits += count.trim().parse::<u64>().unwrap_or(0);
+        }
+        if !merge::worktree_status(git, root).await?.is_empty() {
+            pending.uncommitted_changes = true;
+        }
+    }
+    Ok(pending)
+}
+
+/// Remove every worktree and branch of a session (delete = discard, PRD R5).
+/// Stops at the first failure so the session and the remaining rows stay.
+pub async fn remove_session_worktrees(
+    state: &SharedState,
+    git: &GitRunner,
+    session_id: &str,
+) -> Result<(), WorktreeError> {
+    let rows = {
+        let st = state.lock().await;
+        ensure_idle(&st.db, session_id)?;
+        registry::for_session(&st.db, session_id)?
+    };
+    for row in rows.iter().rev() {
+        remove_row(state, git, row).await?;
+    }
+    Ok(())
+}
+
+async fn remove_row(
+    state: &SharedState,
+    git: &GitRunner,
+    row: &WorktreeRow,
+) -> Result<(), WorktreeError> {
+    let _guard = repo_lock::lock(Path::new(&row.common_dir)).await;
+    remove_worktree(git, row).await?;
+    let st = state.lock().await;
+    registry::remove(&st.db, &row.id)?;
+    Ok(())
+}
+
+/// Remove worktrees whose session was deleted by any path (ON DELETE SET
+/// NULL). Returns how many were removed; failures stay for the next pass.
+pub async fn cleanup_orphans(state: &SharedState, git: &GitRunner) -> usize {
+    let orphans = match registry::orphans(&state.lock().await.db) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "could not list orphaned worktrees");
+            return 0;
+        }
+    };
+    let mut removed = 0;
+    for row in orphans {
+        match remove_row(state, git, &row).await {
+            Ok(()) => removed += 1,
+            Err(error) => {
+                tracing::warn!(%error, path = %row.path, "could not remove an orphaned worktree")
+            }
+        }
+    }
+    removed
+}
+
+/// Startup pass: drop half-created worktrees, mark vanished ones missing,
+/// repair git's links after a moved data directory, and clean orphans.
+pub async fn reconcile(state: SharedState, git: GitRunner) {
+    let rows = match registry::all(&state.lock().await.db) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "could not read the worktree registry");
+            return;
+        }
+    };
+    for row in rows {
+        if row.session_id.is_none() {
+            continue;
+        }
+        if row.status == WorktreeStatus::Creating {
+            if let Err(error) = remove_row(&state, &git, &row).await {
+                tracing::warn!(%error, path = %row.path, "could not drop a half-created worktree");
+            }
+            continue;
+        }
+        let root = Path::new(&row.path);
+        if !root.is_dir() {
+            let st = state.lock().await;
+            let _ = registry::set_status(&st.db, &row.id, WorktreeStatus::Missing);
+            continue;
+        }
+        let common_dir = Path::new(&row.common_dir);
+        if common_dir.is_dir() {
+            let _guard = repo_lock::lock(common_dir).await;
+            if let Err(error) = git
+                .run_git_dir(common_dir, &["worktree", "repair", &row.path])
+                .await
+            {
+                tracing::warn!(%error, path = %row.path, "git worktree repair failed");
+            }
+        }
+    }
+    cleanup_orphans(&state, &git).await;
+}
+
+#[cfg(test)]
+mod tests;

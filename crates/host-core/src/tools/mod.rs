@@ -214,6 +214,10 @@ struct ToolRunnerStartConfig {
     scratch_dir: Option<PathBuf>,
     #[serde(default)]
     env_path: Option<String>,
+    /// Session-scoped variables such as `PI_PORT` for an isolated worktree
+    /// (ADR 0326). Empty for every other call.
+    #[serde(default)]
+    extra_env: Vec<(String, String)>,
 }
 
 fn path_has_nul(path: &Path) -> bool {
@@ -396,6 +400,9 @@ pub async fn run_internal_tool_runner() -> Result<i32> {
     }
     if let Some(path) = config.env_path.as_deref() {
         command.env("PATH", path);
+    }
+    for (name, value) in &config.extra_env {
+        command.env(name, value);
     }
     #[cfg(windows)]
     {
@@ -761,6 +768,8 @@ pub struct BashExecutionOptions {
     pub timeout_ms: Option<u64>,
     pub cancellation: Option<watch::Receiver<bool>>,
     pub output_tx: Option<mpsc::UnboundedSender<String>>,
+    /// Extra environment for the command, e.g. `PI_PORT` (ADR 0326).
+    pub extra_env: Vec<(String, String)>,
 }
 
 impl BashExecutionOptions {
@@ -772,6 +781,7 @@ impl BashExecutionOptions {
             timeout_ms,
             cancellation: None,
             output_tx: None,
+            extra_env: Vec::new(),
         }
     }
 }
@@ -2579,6 +2589,9 @@ async fn spawn_tool_runner(
         if let Some(path) = config.env_path.as_deref() {
             command.env("PATH", path);
         }
+        for (name, value) in &config.extra_env {
+            command.env(name, value);
+        }
     }
 
     #[cfg(not(test))]
@@ -2777,6 +2790,7 @@ async fn tool_bash(
             )
         }),
         env_path: shell::user_login_path().map(str::to_string),
+        extra_env: options.extra_env.clone(),
     };
     let SpawnedToolRunner {
         pid,
@@ -3241,6 +3255,7 @@ mod tests {
             workspace: PathBuf::from("workspace"),
             scratch_dir: None,
             env_path: None,
+            extra_env: Vec::new(),
         };
         let frame = encode_runner_config(&config).unwrap();
         assert_eq!(decode_runner_config(&frame).unwrap().args, config.args);
@@ -3259,6 +3274,7 @@ mod tests {
             workspace: PathBuf::from("workspace"),
             scratch_dir: None,
             env_path: None,
+            extra_env: Vec::new(),
         };
         assert!(encode_runner_config(&nul_config).is_err());
     }
@@ -4726,6 +4742,7 @@ mod tests {
                 timeout_ms: Some(1_000),
                 cancellation: None,
                 output_tx: None,
+                extra_env: Vec::new(),
             }),
         )
         .await;
@@ -4767,6 +4784,7 @@ mod tests {
                 timeout_ms: Some(15_000),
                 cancellation: None,
                 output_tx: None,
+                extra_env: Vec::new(),
             }),
         )
         .await;
@@ -4803,6 +4821,7 @@ mod tests {
                 timeout_ms: Some(15_000),
                 cancellation: None,
                 output_tx: None,
+                extra_env: Vec::new(),
             }),
         )
         .await;
@@ -4872,6 +4891,7 @@ mod tests {
             timeout_ms: None,
             cancellation: None,
             output_tx: Some(tx),
+            extra_env: Vec::new(),
         };
         let mut notifier = OutputNotifier::new(&options);
         for _ in 0..(MAX_OUTPUT_NOTIFICATIONS + 100) {
@@ -4897,6 +4917,7 @@ mod tests {
             timeout_ms: Some(5_000),
             cancellation: None,
             output_tx: None,
+            extra_env: Vec::new(),
         };
 
         let output = execute_tool_with_options(
