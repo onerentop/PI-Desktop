@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionWorktreeSummary, WorktreePendingWork } from "@pi-desktop/shared";
 import { IconBranch, IconFileText, IconFolderOpen, IconPullRequest, IconWrench } from "../../components/icons";
@@ -7,7 +7,12 @@ import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
 import { WorktreeMergeDialog } from "./WorktreeMergeDialog";
 import { WorktreeSetupCommandDialog, WorktreeSetupLogDialog } from "./WorktreeSetupDialogs";
-import { createIsolatedSession, worktreeErrorMessage } from "./worktree-actions";
+import {
+  createIsolatedSession,
+  isolationAvailability,
+  type IsolationProbeState,
+  worktreeErrorMessage,
+} from "./worktree-actions";
 import { useWorktreeUi } from "./worktree-ui-store";
 
 /** Session-row badge for an isolated session (PRD R3). */
@@ -45,12 +50,32 @@ export function WorktreeProjectMenuItems({
 }) {
   const { t } = useTranslation();
   const open = useWorktreeUi((s) => s.open);
+  const reasonId = useId();
+  const [probe, setProbe] = useState<IsolationProbeState>("checking");
+  // Probed each time the menu opens, so the item reflects the current
+  // repository state; a stale answer for another project is dropped.
+  useEffect(() => {
+    let current = true;
+    setProbe("checking");
+    api
+      .probeWorktree(projectPath)
+      .then((result) => current && setProbe(result))
+      .catch(() => current && setProbe("unknown"));
+    return () => {
+      current = false;
+    };
+  }, [projectPath]);
+  const { disabled, reason } = isolationAvailability(probe, t);
   return (
     <>
       <button
         type="button"
         role="menuitem"
         data-action="new-isolated-session"
+        disabled={disabled}
+        aria-busy={probe === "checking" || undefined}
+        aria-describedby={reason ? reasonId : undefined}
+        title={reason}
         onClick={() => {
           onDone();
           void createIsolatedSession(projectPath, t);
@@ -59,6 +84,11 @@ export function WorktreeProjectMenuItems({
         <IconBranch size={14} />
         {t("worktree.newIsolatedSession")}
       </button>
+      {reason ? (
+        <p id={reasonId} className="worktree-menu-reason" data-worktree-unavailable="">
+          {reason}
+        </p>
+      ) : null}
       <button
         type="button"
         role="menuitem"

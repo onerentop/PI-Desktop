@@ -1,4 +1,4 @@
-import { WorktreeErrorCodes } from "@pi-desktop/shared";
+import { WorktreeErrorCodes, type WorktreeProbeResult } from "@pi-desktop/shared";
 import type { TFunction } from "i18next";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
@@ -40,7 +40,29 @@ export function worktreeConflictFiles(error: unknown): string[] {
 export function worktreeErrorMessage(error: unknown, t: TFunction): string {
   const key = ERROR_KEYS[worktreeErrorCode(error) ?? ""];
   if (key) return t(key);
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(error);
+}
+
+/** Result of the project-menu probe: still running, answered, or failed. */
+export type IsolationProbeState = "checking" | "unknown" | WorktreeProbeResult;
+
+/**
+ * Whether "New isolated session" is offered (PRD R6, AC9). Disabled while the
+ * probe runs and, with the reason, when the project cannot host a worktree.
+ * A failed probe leaves it enabled; creating re-probes and reports the error.
+ */
+export function isolationAvailability(
+  state: IsolationProbeState,
+  t: TFunction,
+): { disabled: boolean; reason?: string } {
+  if (state === "checking") return { disabled: true };
+  if (state === "unknown" || state.available) return { disabled: false };
+  return {
+    disabled: true,
+    reason: worktreeErrorMessage({ code: state.errorCode, message: state.message }, t),
+  };
 }
 
 /** What the merge dialog shows after a failed merge. */

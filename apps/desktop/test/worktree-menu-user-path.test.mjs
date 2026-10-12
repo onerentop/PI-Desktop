@@ -1,0 +1,139 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import test from "node:test";
+import { repositoryRoot, resolveElectronBinary } from "../../../scripts/e2e/boot.mjs";
+
+// PRD R6 / AC9: the project menu greys out "New isolated session" with the
+// reason for a project that cannot host a worktree, and creates the session
+// for one that can. Rendered in a real DOM so the probe effect runs.
+
+const root = repositoryRoot();
+const { build } = createRequire(join(root, "packages/agent-runtime/package.json"))("esbuild");
+const fixture = String.raw`
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
+import { catalogs, flattenCatalog } from "@pi-desktop/i18n";
+import { IPC } from "@pi-desktop/shared";
+import { WorktreeProjectMenuItems } from "../../apps/desktop/src/features/worktree/WorktreeSidebarParts";
+import { useAppStore } from "../../apps/desktop/src/stores/app-store";
+
+await i18n.use(initReactI18next).init({ lng: "en", keySeparator: false,
+  resources: { en: { translation: flattenCatalog(catalogs.en) } },
+  interpolation: { escapeValue: false } });
+const probes = {
+  "/plain": { available: false, errorCode: "WORKTREE_NOT_GIT", message: "raw" },
+  "/odd": { available: false, errorCode: "WORKTREE_GIT_FAILED", message: "git exploded" },
+  "/repo": { available: true, uncommittedChanges: false },
+};
+const pending = [];
+window.piDesktop = { platform: "linux", on() { return () => {}; },
+  invoke(channel, payload) {
+    if (channel !== IPC.invoke.worktreeProbe) throw new Error("Unexpected IPC " + channel);
+    return new Promise((resolve) => pending.push(() => resolve({ ok: true, data: probes[payload.projectPath] })));
+  } };
+const created = [];
+const toasts = [];
+useAppStore.setState({
+  newSession: async (options) => { created.push(options); },
+  showToast: (message) => { toasts.push(message); },
+});
+const frame = () => new Promise(requestAnimationFrame);
+async function settle() { await frame(); await frame(); }
+function check(condition, message) { if (!condition) throw new Error(message); }
+const item = () => document.querySelector('[data-action="new-isolated-session"]');
+const reason = () => document.querySelector("[data-worktree-unavailable]");
+const rootNode = createRoot(document.getElementById("root"));
+function show(projectPath) {
+  flushSync(() => rootNode.render(React.createElement(WorktreeProjectMenuItems,
+    { projectPath, projectName: "P", onDone() {} })));
+}
+async function answer() { while (pending.length) pending.shift()(); await settle(); }
+window.menuProbe = async () => {
+  show("/plain");
+  check(item().disabled, "item must be disabled while the probe runs");
+  check(!reason(), "no reason before the probe answers");
+  await answer();
+  check(item().disabled, "a non-git project must keep the item disabled");
+  check(reason()?.textContent === i18n.t("worktree.errors.notGit"), "missing localized reason");
+  check(item().getAttribute("aria-describedby") === reason().id, "reason not linked to the item");
+  item().click();
+  check(created.length === 0, "a disabled item created a session");
+
+  show("/odd");
+  await answer();
+  check(reason()?.textContent === "git exploded", "unknown codes must show the host message");
+
+  show("/repo");
+  check(item().disabled, "switching project re-probes");
+  await answer();
+  check(!item().disabled && !reason(), "a git project must enable the item");
+  item().click();
+  await answer();
+  await settle();
+  check(JSON.stringify(created) === JSON.stringify([{ projectPath: "/repo", isolated: true }]), "session not created: " + JSON.stringify(created));
+  check(toasts.length === 0, "unexpected toast " + JSON.stringify(toasts));
+  flushSync(() => rootNode.unmount());
+  return { passed: true };
+};
+`;
+
+test("the project menu greys out isolated sessions with the reason and creates one for a git project", {
+  skip: process.platform === "linux" && !process.env.DISPLAY ? "Electron requires a display" : false,
+}, async () => {
+  const temp = await mkdtemp(join(root, "apps/desktop/.worktree-menu-ui-"));
+  try {
+    await build({
+      stdin: { contents: fixture, resolveDir: join(root, "scripts/e2e"), loader: "tsx" },
+      outfile: join(temp, "renderer.js"), bundle: true, platform: "browser", format: "esm", jsx: "automatic",
+      define: { "process.env.NODE_ENV": '"production"' },
+      alias: {
+        "@pi-desktop/i18n": join(root, "packages/i18n/src"),
+        "@pi-desktop/shared": join(root, "packages/shared/src"),
+        react: join(root, "apps/desktop/node_modules/react"),
+        "react-dom": join(root, "apps/desktop/node_modules/react-dom"),
+        i18next: join(root, "apps/desktop/node_modules/i18next"),
+        "react-i18next": join(root, "apps/desktop/node_modules/react-i18next"),
+      },
+      nodePaths: [join(root, "apps/desktop/node_modules")],
+    });
+    await writeFile(join(temp, "index.html"), '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; style-src \'self\' \'unsafe-inline\'"><div id="root"></div><script type="module" src="renderer.js"></script>');
+    await writeFile(join(temp, "main.cjs"), `
+const { app, BrowserWindow } = require("electron");
+const path = require("node:path");
+app.setPath("userData", path.join(__dirname, "profile"));
+app.whenReady().then(async () => {
+  const win = new BrowserWindow({ show: false, width: 800, height: 600,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  try {
+    await win.loadFile(path.join(__dirname, "index.html"));
+    console.log("MENU_PROBE " + JSON.stringify(await win.webContents.executeJavaScript("window.menuProbe()")));
+    app.exit(0);
+  } catch (error) { console.error(error?.stack ?? error); app.exit(1); }
+});`);
+    const env = { ...process.env };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const child = spawn(resolveElectronBinary(root).electronBinary, [join(temp, "main.cjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk) => { output += chunk; });
+    }
+    const timer = setTimeout(() => child.kill("SIGKILL"), 45_000);
+    let code;
+    try {
+      code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+    } finally { clearTimeout(timer); }
+    assert.equal(code, 0, output.slice(-6000));
+    const line = output.split(/\r?\n/).find((entry) => entry.startsWith("MENU_PROBE "));
+    assert.ok(line, output.slice(-6000));
+    assert.deepEqual(JSON.parse(line.slice("MENU_PROBE ".length)), { passed: true });
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});

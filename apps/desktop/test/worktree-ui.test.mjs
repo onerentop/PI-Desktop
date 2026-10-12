@@ -158,6 +158,24 @@ test("only isolated sessions get worktree menu items, disabled while running or 
   );
   assert.ok(project.includes(en.newIsolatedSession));
   assert.ok(project.includes(en.setupCommand.menu));
+  // Before the probe answers the item cannot be clicked.
+  assert.match(project, /data-action="new-isolated-session"[^>]*disabled/);
+});
+
+test("the isolated-session menu item explains why a project cannot host one", () => {
+  const { isolationAvailability } = modules.actions;
+  const t = i18n.t.bind(i18n);
+  assert.deepEqual(isolationAvailability("checking", t), { disabled: true });
+  assert.deepEqual(isolationAvailability("unknown", t), { disabled: false });
+  assert.deepEqual(isolationAvailability({ available: true, uncommittedChanges: true }, t), { disabled: false });
+  assert.deepEqual(
+    isolationAvailability({ available: false, errorCode: "WORKTREE_DETACHED_HEAD", message: "raw" }, t),
+    { disabled: true, reason: en.errors.detachedHead },
+  );
+  assert.deepEqual(
+    isolationAvailability({ available: false, errorCode: "WORKTREE_GIT_FAILED", message: "git exploded" }, t),
+    { disabled: true, reason: "git exploded" },
+  );
 });
 
 test("creating an isolated session probes first and explains every refusal", async () => {
