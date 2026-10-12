@@ -86,14 +86,14 @@ fn project_key(toplevel: &Path) -> String {
     )
 }
 
-fn short_id(id: &str) -> String {
+pub(super) fn short_id(id: &str) -> String {
     id.chars()
         .filter(char::is_ascii_alphanumeric)
         .take(12)
         .collect()
 }
 
-fn port_is_free(port: u16) -> bool {
+pub(super) fn port_is_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
@@ -154,7 +154,7 @@ pub fn tool_root(db: &Database, session_id: &str) -> Result<Option<PathBuf>, Wor
     }
 }
 
-fn missing_error() -> WorktreeError {
+pub(super) fn missing_error() -> WorktreeError {
     WorktreeError::new(
         "WORKTREE_MISSING",
         "the isolated worktree folder no longer exists; delete this session",
@@ -174,7 +174,7 @@ pub fn tool_env(db: &Database, session_id: &str) -> Vec<(String, String)> {
     env_for(&row, project.as_deref())
 }
 
-fn env_for(row: &WorktreeRow, project: Option<&str>) -> Vec<(String, String)> {
+pub(super) fn env_for(row: &WorktreeRow, project: Option<&str>) -> Vec<(String, String)> {
     let mut env = vec![(
         "PI_WORKTREE_ROOT".to_string(),
         row.workspace_root().to_string_lossy().into_owned(),
@@ -356,7 +356,12 @@ pub async fn create_session_worktree(
     })
 }
 
-async fn run_setup(state: SharedState, row: WorktreeRow, project_path: String, command: String) {
+pub(super) async fn run_setup(
+    state: SharedState,
+    row: WorktreeRow,
+    project_path: String,
+    command: String,
+) {
     let shell_id = {
         let st = state.lock().await;
         let configured = st

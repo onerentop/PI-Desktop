@@ -571,6 +571,10 @@ pub struct ToolsExecuteParams {
     /// permission mode. `inherit` and absent behave identically.
     #[serde(default)]
     pub permission_scope: Option<String>,
+    /// Chain id of a Write/Edit subagent with its own worktree (ADR 0326).
+    /// host-core resolves it against its registry; an unknown id is ignored.
+    #[serde(default)]
+    pub delegation_id: Option<String>,
     #[serde(default)]
     pub expected_command_shell_id: Option<String>,
     #[serde(default)]

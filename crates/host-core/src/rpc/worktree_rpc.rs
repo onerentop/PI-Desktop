@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use super::{rpc_err, JsonRpcError};
 use crate::session_worktrees::git::GitRunner;
-use crate::session_worktrees::{lifecycle, merge, probe, registry, WorktreeError};
+use crate::session_worktrees::{delegate, lifecycle, merge, probe, registry, WorktreeError};
 use crate::sessions;
 use crate::state::AppState;
 
@@ -111,6 +111,30 @@ pub(super) async fn handle(
                     ))
                 })?;
             Ok(json!({ "path": root }))
+        }
+        // Called by the agent runtime for Write/Edit subagents of an
+        // isolated session; `delegationId` is the subagent's chain id.
+        "worktree.delegate.create" => {
+            let session_id = str_param(&params, "sessionId")?;
+            let delegation_id = str_param(&params, "delegationId")?;
+            let worktree =
+                delegate::create_delegate_worktree(state, &git, session_id, delegation_id)
+                    .await
+                    .map_err(to_rpc)?;
+            Ok(json!({ "worktree": worktree }))
+        }
+        "worktree.delegate.settle" => {
+            let session_id = str_param(&params, "sessionId")?;
+            let delegation_id = str_param(&params, "delegationId")?;
+            let merge = params
+                .get("merge")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let settlement =
+                delegate::settle_delegate_worktree(state, &git, session_id, delegation_id, merge)
+                    .await
+                    .map_err(to_rpc)?;
+            Ok(json!({ "settlement": settlement }))
         }
         "worktree.setupCommand.get" => {
             let project = str_param(&params, "projectPath")?;

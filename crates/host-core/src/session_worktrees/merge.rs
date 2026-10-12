@@ -140,47 +140,64 @@ pub async fn merge(
     if current.is_empty() {
         return Ok(MergeOutcome::NothingToMerge);
     }
+    land(git, row, project, &commit_message(title)).await?;
+    Ok(MergeOutcome::Merged {
+        commits: current.commits.len(),
+        files: current.files.len(),
+    })
+}
+
+/// Land `row`'s branch on its owner branch, which is checked out in
+/// `owner_checkout` (the project for a session, the session worktree for a
+/// subagent). Uncommitted work is committed with `message` first; the owner
+/// branch is merged into `row`'s branch inside its own worktree, where a
+/// conflict stays; the owner checkout is only fast-forwarded, and git refuses
+/// to overwrite uncommitted files there. Shared by "Merge into project" and
+/// the subagent merge-back (ADR 0326).
+pub async fn land(
+    git: &GitRunner,
+    row: &WorktreeRow,
+    owner_checkout: &Path,
+    message: &str,
+) -> Result<(), WorktreeError> {
     let worktree = Path::new(&row.path);
     // Checked before anything is committed, so a refusal changes nothing.
     let checked_out = git
-        .output(project, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .output(
+            owner_checkout,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        )
         .await?;
     if !checked_out.success() || checked_out.stdout.trim() != row.owner_branch {
         return Err(WorktreeError::new(
             "WORKTREE_OWNER_BRANCH_CHANGED",
             format!(
-                "the project is no longer on `{}`; check that branch out again to merge",
+                "the target is no longer on `{}`; check that branch out again to merge",
                 row.owner_branch
             ),
         ));
     }
 
-    if current.conflict {
+    if merge_in_progress(git, worktree).await? {
         conclude_resolved_merge(git, worktree).await?;
     }
-    if !worktree_status(git, worktree).await?.is_empty() {
-        git.run(worktree, &["add", "-A"]).await?;
-        let message = commit_message(title);
-        git.run(worktree, &["commit", "-q", "-m", &message])
-            .await
-            .map_err(|error| WorktreeError::new("WORKTREE_COMMIT_FAILED", error.to_string()))?;
-    }
+    commit_all(git, worktree, message).await?;
 
-    // One retry covers the project branch moving between the two steps.
+    // One retry covers the owner branch moving between the two steps.
     for attempt in 0..2 {
         sync_owner_into_session(git, worktree, &row.owner_branch).await?;
         let forwarded = git
-            .output(project, &["merge", "--ff-only", "--no-edit", &row.branch])
+            .output(
+                owner_checkout,
+                &["merge", "--ff-only", "--no-edit", &row.branch],
+            )
             .await?;
         if forwarded.success() {
-            return Ok(MergeOutcome::Merged {
-                commits: current.commits.len(),
-                files: current.files.len(),
-            });
+            return Ok(());
         }
         let owner_contained = git
             .output(
-                project,
+                owner_checkout,
                 &[
                     "merge-base",
                     "--is-ancestor",
@@ -194,13 +211,38 @@ pub async fn merge(
             return Err(WorktreeError::new(
                 "WORKTREE_PROJECT_DIRTY",
                 format!(
-                    "the project has changes that the merge would overwrite: {}",
+                    "uncommitted changes in the target would be overwritten: {}",
                     forwarded.stderr.trim()
                 ),
             ));
         }
     }
     unreachable!("the loop returns on its second attempt")
+}
+
+/// Commit every change in `worktree` with `message`; nothing to do when clean.
+pub async fn commit_all(
+    git: &GitRunner,
+    worktree: &Path,
+    message: &str,
+) -> Result<bool, WorktreeError> {
+    if worktree_status(git, worktree).await?.is_empty() {
+        return Ok(false);
+    }
+    git.run(worktree, &["add", "-A"]).await?;
+    git.run(worktree, &["commit", "-q", "-m", message])
+        .await
+        .map_err(|error| WorktreeError::new("WORKTREE_COMMIT_FAILED", error.to_string()))?;
+    Ok(true)
+}
+
+/// Commits on `row`'s branch that its owner branch does not have yet.
+pub async fn commits_ahead(git: &GitRunner, row: &WorktreeRow) -> Result<u64, WorktreeError> {
+    let range = format!("{}..{}", row.owner_branch, row.branch);
+    let count = git
+        .run(Path::new(&row.path), &["rev-list", "--count", &range])
+        .await?;
+    Ok(count.trim().parse().unwrap_or(0))
 }
 
 /// Merge the owner branch into the session branch inside the worktree. A
@@ -268,7 +310,7 @@ pub async fn unmerged_files(
     Ok(files)
 }
 
-async fn merge_in_progress(git: &GitRunner, worktree: &Path) -> Result<bool, WorktreeError> {
+pub async fn merge_in_progress(git: &GitRunner, worktree: &Path) -> Result<bool, WorktreeError> {
     Ok(git
         .output(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
         .await?
@@ -313,7 +355,7 @@ fn has_conflict_markers(content: &[u8]) -> bool {
         .any(|line| line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> "))
 }
 
-fn commit_message(title: &str) -> String {
+pub fn commit_message(title: &str) -> String {
     let title = title.trim();
     if title.is_empty() {
         "pi: session changes".to_string()

@@ -2,6 +2,7 @@
 //! (ADR 0326). host-core owns every worktree path and every git command; the
 //! renderer and the agent runtime only name a session or delegation.
 
+pub mod delegate;
 pub mod git;
 pub mod include;
 pub mod lifecycle;

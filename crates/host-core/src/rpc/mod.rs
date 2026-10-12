@@ -3827,7 +3827,16 @@ async fn handle_request(
                     // isolated when the renderer switches between project tabs.
                     // The session's project remains the containment root for all
                     // known sessions.
-                    let ws = resolve_tool_workspace_for_call(&st, &p.session_id, &p.args)?;
+                    let ws = match crate::session_worktrees::delegate::tool_root(
+                        &st.db,
+                        &p.session_id,
+                        p.delegation_id.as_deref(),
+                    )
+                    .map_err(worktree_rpc::to_rpc)?
+                    {
+                        Some(root) => Some(root.to_string_lossy().into_owned()),
+                        None => resolve_tool_workspace_for_call(&st, &p.session_id, &p.args)?,
+                    };
                     let scratch = scratch::session_dir(&st.data_dir, &p.session_id);
                     let external_path_permission = requires_external_path_permission(
                         ws.as_deref(),
@@ -4091,7 +4100,11 @@ async fn handle_request(
                     (
                         st.data_dir.clone(),
                         st.hashline.clone(),
-                        crate::session_worktrees::lifecycle::tool_env(&st.db, &p.session_id),
+                        crate::session_worktrees::delegate::tool_env(
+                            &st.db,
+                            &p.session_id,
+                            p.delegation_id.as_deref(),
+                        ),
                     )
                 };
                 let hashline_ctx = tools::HashlineContext {
