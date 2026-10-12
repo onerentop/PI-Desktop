@@ -1191,6 +1191,20 @@ turn open and delivers the reports when they finish. User Stop, `TaskStop`,
 runtime dispose, or a parent fatal error (D352) abort a still-running
 delegate.
 
+**Isolated worktrees (ADR 0326).** In an isolated session, a delegate whose
+tools include `Write` or `Edit` gets its own worktree before its first turn
+(`worktree.delegate.create`, keyed by the delegation chain id, so a resumed
+delegate reuses it), and its `tools.execute` calls carry that id as
+`delegationId`. When the run ends the runtime calls
+`worktree.delegate.settle` before publishing the report: a completed run is
+merged back into the session worktree, a failed or stopped run keeps its
+changes, and the outcome (merged, no changes, conflict with files, not merged
+with reason, or kept) is appended to the report so the parent knows whether to
+resume the delegate. Host-core briefly holds the session's own tools while it
+commits and merges in the session worktree, waiting at most a few seconds for
+tools already running. Read-only and Bash-only delegates, and every delegate
+of a non-isolated session, are unchanged.
+
 ### 5f.1 Delegate permission scope (ADR 0089)
 
 A delegate's tool calls flow through the same host `tools.execute` path as the
@@ -1645,6 +1659,15 @@ Settings provides dedicated management for the fixed global path. The Projects
 view project-list menu provides an `AGENTS.md` editor for its corresponding
 registered project root. Its IPC does not accept arbitrary renderer file paths.
 Saves affect the next prompt without restarting the application.
+
+For an isolated session (ADR 0326) the launch metadata carries a separate
+`workspaceRoot`, its git worktree: the instruction chain and its path
+resolution are rooted there, so the agent follows the worktree's own
+`AGENTS.md` files. `projectPath` stays the project identity for memory,
+skills, plugins, MCP servers, subagent definitions, the custom system prompt,
+and group context. The system prompt adds a short isolated-workspace note
+(work only in the worktree, use the `PI_PORT` block, leave branch changes and
+merging to the user, and how to resolve a merge conflict).
 
 ## 8. Concurrency
 

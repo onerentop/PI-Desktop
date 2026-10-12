@@ -234,10 +234,11 @@ destination, chat as the home surface, tools and permissions inline.
   never removes the transcript. Open folder is a project action, not a
   conversation action.
 - **Isolated sessions** (ADR 0326): the project menu offers **New isolated
-  session**. It probes the project on click: an unsuitable project (not git,
-  no commits, detached `HEAD`, missing or old git) gets an error toast naming
-  the reason, and a dirty project gets an info toast that uncommitted changes
-  are not included. The menu also
+  session**. Opening the menu probes the project: the item stays disabled
+  until the answer arrives, and for an unsuitable project (not git, no
+  commits, detached `HEAD`, missing or old git) it stays disabled with the
+  reason shown under it. Creating probes again; a dirty project gets an info
+  toast that uncommitted changes are not included. The menu also
   holds **Worktree setup command…**. An isolated row shows an `Isolated` badge
   (or `Conflict`, `Folder missing`, `Setup failed`) and adds **Merge into
   project…** (preview of commits and files, then merge; conflicting files are

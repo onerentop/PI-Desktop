@@ -938,6 +938,12 @@ type SessionSummary = {
  supportedThinkingLevels?: ThinkingLevel[];
  updatedAt: string;
  createdAt: string;
+ /** Isolated sessions only (ADR 0326); never carries a filesystem path. */
+ worktree?: {
+  branch: string;
+  status: "creating" | "active" | "conflict" | "merged" | "missing";
+  setupStatus?: "none" | "running" | "ok" | "failed" | null;
+ };
 };
 
 type SessionMessageOrigin = {
@@ -1051,7 +1057,9 @@ through one Electron-only allowlisted channel:
 Minimal interface:
 
 - `session/list`
-- `session/create`
+- `session/create` — optional `isolated: true` with a `projectPath` creates
+  the session in its own git worktree (ADR 0326); a refusal surfaces the host's
+  `WORKTREE_*` code
 - `session/open(sessionId)` — validate and select an existing durable session
   through the reviewed desktop-control path; it does not create or mutate the
   session
@@ -1400,6 +1408,22 @@ type ProjectMemoryEntry = {
  content: string;
 };
 ```
+
+## 9a. Session worktree API (ADR 0326)
+
+Thin forwards to the host `worktree.*` methods
+(06-host-rpc-protocol §4); errors keep the host's `WORKTREE_*` code.
+
+- `worktree/probe({ projectPath })` → whether the project can host isolated
+  sessions, with the refusal code, or whether it has uncommitted changes
+- `worktree/preview({ sessionId })` / `worktree/merge({ sessionId, previewToken })`
+- `worktree/pendingWork({ sessionId })` — unmerged work a delete discards
+- `worktree/setupLog({ sessionId })`
+- `worktree/reveal({ sessionId })` — Electron Main resolves the folder with
+  `worktree.location` and opens it in the OS file manager; the path is never
+  returned to the renderer
+- `worktree/setupCommand/get({ projectPath })` /
+  `worktree/setupCommand/set({ projectPath, command })`
 
 ## 10. Tool Permission API
 

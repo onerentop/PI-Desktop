@@ -352,7 +352,7 @@
   second. Resolve the conflict in the second session and merge again. In one
   isolated session, start two writing subagents in parallel. Finally delete
   an isolated session with unmerged work, and restart the app once while a
-  session exists.
+  session exists. Open the menu of a non-git project.
 - **Expected:** Each session's edits land only in its own worktree; the project
   checkout and `git status` stay clean until a merge, and the ignored include
   file is present in each worktree. The two sessions get distinct ports. The
@@ -363,7 +363,8 @@
   session. Delete warns about unmerged work and removes the worktree folder
   and `pi-desktop/<id>` branch without touching files linked from it. After
   restart the session reopens in its worktree; a manually removed worktree
-  shows `Folder missing` and never falls back to the project.
+  shows `Folder missing` and never falls back to the project. In the non-git
+  project **New isolated session** is disabled with the reason under it.
 - **Windows checks:** a worktree containing a directory junction is deleted
   without following the junction; a deep path beyond 260 characters is
   created and removed; deleting while a file in the worktree is locked fails
