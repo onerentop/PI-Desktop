@@ -87,12 +87,15 @@ pub async fn probe(git: &GitRunner, project: &Path) -> Result<RepoInfo, ProbeErr
         return Err(ProbeError::NoCommits);
     }
 
-    let branch = git
-        .output(project, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+    // The full ref, not `--short`: that prints `heads/<name>` when a tag
+    // shares the branch's name.
+    let head = git
+        .output(project, &["symbolic-ref", "--quiet", "HEAD"])
         .await?;
-    if !branch.success() {
-        return Err(ProbeError::DetachedHead);
-    }
+    let branch = match head.stdout.trim().strip_prefix("refs/heads/") {
+        Some(branch) if head.success() => branch.to_string(),
+        _ => return Err(ProbeError::DetachedHead),
+    };
 
     let namespace = git
         .output(
@@ -118,7 +121,7 @@ pub async fn probe(git: &GitRunner, project: &Path) -> Result<RepoInfo, ProbeErr
         // Relative from a subdirectory (for example `../../.git`); git 2.29
         // has no `--path-format=absolute`, so resolve it here.
         common_dir: canonical(&project.join(common_dir.trim())),
-        branch: branch.stdout.trim().to_string(),
+        branch,
     })
 }
 

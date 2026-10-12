@@ -257,3 +257,28 @@ async fn an_unfinished_session_merge_blocks_without_forcing() {
     assert!(env.row("chain-a").await.is_some());
     assert!(!env.session_root.join("g.txt").exists());
 }
+
+/// A vanished subagent folder keeps its committed branch, and a resume
+/// re-attaches it instead of deleting the work.
+#[tokio::test]
+async fn a_vanished_subagent_folder_keeps_and_reattaches_its_branch() {
+    let env = env().await;
+    let a = env.create("chain-a").await;
+    fs::write(a.join("g.txt"), "committed").unwrap();
+    git_cmd(&a, &["add", "g.txt"]);
+    git_cmd(&a, &["commit", "-q", "-m", "subagent work"]);
+    let branch = env.row("chain-a").await.unwrap().branch;
+    crate::session_worktrees::remove::clear_contents(&a).unwrap();
+    fs::remove_dir_all(&a).unwrap();
+
+    assert_eq!(env.settle("chain-a", true).await, DelegateSettlement::Kept);
+    assert!(env.branches().contains(&branch));
+
+    let resumed = env.create("chain-a").await;
+    assert_eq!(read(&resumed.join("g.txt")), "committed");
+    assert!(matches!(
+        env.settle("chain-a", true).await,
+        DelegateSettlement::Merged { .. }
+    ));
+    assert_eq!(read(&env.session_root.join("g.txt")), "committed");
+}

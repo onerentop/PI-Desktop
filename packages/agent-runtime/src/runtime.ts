@@ -1763,6 +1763,7 @@ export function isolatedWorkspaceGuidance(): string {
     "The worktree is a fresh checkout, so install dependencies first when a build or test needs them.",
     "Start dev servers only on the 10 ports beginning at the PI_PORT environment variable.",
     "Do not switch branches, rebase, or reset in this worktree; the user merges its branch into the project from the app.",
+    "To resolve a merge conflict here, remove the conflict markers from text files, and stage binary or deleted files with git add or git rm.",
     "MCP tools act on the main project, not on this workspace.",
     "Subagents that can Write or Edit work in their own worktrees and are merged back when they finish; their report states the merge result.",
   ].join(" ");

@@ -5,6 +5,7 @@
 //! and the project branch is only fast-forwarded. git itself refuses a
 //! fast-forward that would overwrite uncommitted or untracked project files.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
@@ -58,7 +59,7 @@ pub enum MergeOutcome {
 
 pub async fn preview(git: &GitRunner, row: &WorktreeRow) -> Result<MergePreview, WorktreeError> {
     let worktree = Path::new(&row.path);
-    let range = format!("{}..{}", row.owner_branch, row.branch);
+    let range = format!("{}..{}", head_ref(&row.owner_branch), head_ref(&row.branch));
     let log = git
         .run(worktree, &["log", "-z", "--format=%H%x1f%s", &range])
         .await?;
@@ -74,7 +75,11 @@ pub async fn preview(git: &GitRunner, row: &WorktreeRow) -> Result<MergePreview,
         })
         .collect();
 
-    let symmetric = format!("{}...{}", row.owner_branch, row.branch);
+    let symmetric = format!(
+        "{}...{}",
+        head_ref(&row.owner_branch),
+        head_ref(&row.branch)
+    );
     let diff = git
         .run(
             worktree,
@@ -107,9 +112,19 @@ pub async fn preview(git: &GitRunner, row: &WorktreeRow) -> Result<MergePreview,
 
     let conflict = merge_in_progress(git, worktree).await?;
     let head = git.run(worktree, &["rev-parse", "HEAD"]).await?;
+    let content = content_fingerprint(git, worktree, &status).await?;
     let token = format!(
         "{:016x}",
-        fnv1a64(format!("{}\n{}\n{}", head.trim(), conflict, status).as_bytes())
+        fnv1a64(
+            format!(
+                "{}\n{}\n{}\n{:016x}",
+                head.trim(),
+                conflict,
+                status,
+                content
+            )
+            .as_bytes()
+        )
     );
     Ok(MergePreview {
         branch: row.branch.clone(),
@@ -163,12 +178,9 @@ pub async fn land(
     let worktree = Path::new(&row.path);
     // Checked before anything is committed, so a refusal changes nothing.
     let checked_out = git
-        .output(
-            owner_checkout,
-            &["symbolic-ref", "--quiet", "--short", "HEAD"],
-        )
+        .output(owner_checkout, &["symbolic-ref", "--quiet", "HEAD"])
         .await?;
-    if !checked_out.success() || checked_out.stdout.trim() != row.owner_branch {
+    if !checked_out.success() || checked_out.stdout.trim() != head_ref(&row.owner_branch) {
         return Err(WorktreeError::new(
             "WORKTREE_OWNER_BRANCH_CHANGED",
             format!(
@@ -189,7 +201,7 @@ pub async fn land(
         let forwarded = git
             .output(
                 owner_checkout,
-                &["merge", "--ff-only", "--no-edit", &row.branch],
+                &["merge", "--ff-only", "--no-edit", &head_ref(&row.branch)],
             )
             .await?;
         if forwarded.success() {
@@ -201,8 +213,8 @@ pub async fn land(
                 &[
                     "merge-base",
                     "--is-ancestor",
-                    &row.owner_branch,
-                    &row.branch,
+                    &head_ref(&row.owner_branch),
+                    &head_ref(&row.branch),
                 ],
             )
             .await?
@@ -238,7 +250,7 @@ pub async fn commit_all(
 
 /// Commits on `row`'s branch that its owner branch does not have yet.
 pub async fn commits_ahead(git: &GitRunner, row: &WorktreeRow) -> Result<u64, WorktreeError> {
-    let range = format!("{}..{}", row.owner_branch, row.branch);
+    let range = format!("{}..{}", head_ref(&row.owner_branch), head_ref(&row.branch));
     let count = git
         .run(Path::new(&row.path), &["rev-list", "--count", &range])
         .await?;
@@ -253,7 +265,7 @@ async fn sync_owner_into_session(
     owner_branch: &str,
 ) -> Result<(), WorktreeError> {
     let merged = git
-        .output(worktree, &["merge", "--no-edit", owner_branch])
+        .output(worktree, &["merge", "--no-edit", &head_ref(owner_branch)])
         .await?;
     if merged.success() {
         return Ok(());
@@ -271,17 +283,18 @@ async fn sync_owner_into_session(
     ))
 }
 
-/// Finish a merge whose conflicts were resolved in the worktree. Files the
-/// agent edited but did not `git add` count as resolved once they no longer
-/// contain conflict markers.
+/// Finish a merge whose conflicts were resolved in the worktree. Text files
+/// the agent edited but did not `git add` count as resolved once they no
+/// longer contain conflict markers (see `resolved_by_edit`).
 async fn conclude_resolved_merge(git: &GitRunner, worktree: &Path) -> Result<(), WorktreeError> {
+    let stages = conflict_stages(git, worktree).await?;
     let mut unresolved = Vec::new();
     for file in unmerged_files(git, worktree).await? {
-        let content = std::fs::read(worktree.join(&file)).unwrap_or_default();
-        if has_conflict_markers(&content) {
-            unresolved.push(file);
-        } else {
+        let file_stages = stages.get(&file).map(Vec::as_slice).unwrap_or(&[]);
+        if resolved_by_edit(worktree, &file, file_stages) {
             git.run(worktree, &["add", "--", &file]).await?;
+        } else {
+            unresolved.push(file);
         }
     }
     if !unresolved.is_empty() {
@@ -353,6 +366,76 @@ fn has_conflict_markers(content: &[u8]) -> bool {
     let text = String::from_utf8_lossy(content);
     text.lines()
         .any(|line| line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> "))
+}
+
+/// Full ref of a local branch, so a tag with the same short name is never
+/// picked instead (git resolves `refs/tags/<name>` before `refs/heads/`).
+pub fn head_ref(branch: &str) -> String {
+    format!("refs/heads/{branch}")
+}
+
+/// Conflict stages (1 base, 2 ours, 3 theirs) of each unmerged path.
+async fn conflict_stages(
+    git: &GitRunner,
+    worktree: &Path,
+) -> Result<BTreeMap<String, Vec<char>>, WorktreeError> {
+    let output = git.run(worktree, &["ls-files", "-u", "-z"]).await?;
+    let mut stages: BTreeMap<String, Vec<char>> = BTreeMap::new();
+    for record in output.split('\0').filter(|record| !record.is_empty()) {
+        // `<mode> <object> <stage>\t<path>`
+        let Some((meta, path)) = record.split_once('\t') else {
+            continue;
+        };
+        if let Some(stage) = meta.rsplit(' ').next().and_then(|s| s.chars().next()) {
+            stages.entry(path.to_string()).or_default().push(stage);
+        }
+    }
+    Ok(stages)
+}
+
+/// Whether an unstaged conflicted file may be treated as resolved: only a
+/// text file changed on both sides, which git fills with conflict markers,
+/// once those markers are gone. Binary, delete/modify, and add/delete
+/// conflicts leave no markers, so they need an explicit `git add`/`git rm`.
+fn resolved_by_edit(worktree: &Path, path: &str, stages: &[char]) -> bool {
+    if !(stages.contains(&'2') && stages.contains(&'3')) {
+        return false;
+    }
+    let file = worktree.join(path);
+    match std::fs::symlink_metadata(&file) {
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return false,
+    }
+    match std::fs::read(&file) {
+        Ok(content) => !content.contains(&0) && !has_conflict_markers(&content),
+        Err(_) => false,
+    }
+}
+
+/// Hash of the worktree's uncommitted content: the tracked diff against
+/// `HEAD` plus every untracked file, so a re-edit that leaves `git status`
+/// unchanged still invalidates a preview.
+async fn content_fingerprint(
+    git: &GitRunner,
+    worktree: &Path,
+    status: &str,
+) -> Result<u64, WorktreeError> {
+    let mut bytes = git
+        .run(
+            worktree,
+            &["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv"],
+        )
+        .await?
+        .into_bytes();
+    for (code, path) in parse_porcelain(status) {
+        if code == "?" {
+            bytes.extend_from_slice(path.as_bytes());
+            bytes.push(0);
+            bytes.extend(std::fs::read(worktree.join(&path)).unwrap_or_default());
+            bytes.push(0);
+        }
+    }
+    Ok(fnv1a64(&bytes))
 }
 
 pub fn commit_message(title: &str) -> String {
@@ -580,6 +663,86 @@ mod tests {
     async fn an_unchanged_session_has_nothing_to_merge() {
         let f = fixture("a\n");
         assert_eq!(merge_now(&f).await.unwrap(), MergeOutcome::NothingToMerge);
+    }
+
+    /// A re-edit that leaves `git status` unchanged still invalidates the
+    /// preview, so the merge never lands content the user did not review.
+    #[tokio::test]
+    async fn re_editing_a_modified_file_after_the_preview_stops_the_merge() {
+        let f = fixture("a\n");
+        fs::write(wt(&f).join("f.txt"), "A\n").unwrap();
+        fs::write(wt(&f).join("new.txt"), "one").unwrap();
+        let git = GitRunner::default();
+        let token = preview(&git, &f.row).await.unwrap().preview_token;
+        fs::write(wt(&f).join("f.txt"), "unreviewed\n").unwrap();
+        let error = merge(&git, &f.row, &f.repo, "t", &token).await.unwrap_err();
+        assert_eq!(error.code, "WORKTREE_CHANGED_SINCE_PREVIEW");
+
+        let token = preview(&git, &f.row).await.unwrap().preview_token;
+        fs::write(wt(&f).join("new.txt"), "two").unwrap();
+        let error = merge(&git, &f.row, &f.repo, "t", &token).await.unwrap_err();
+        assert_eq!(error.code, "WORKTREE_CHANGED_SINCE_PREVIEW");
+        assert_eq!(fs::read_to_string(f.repo.join("f.txt")).unwrap(), "a\n");
+    }
+
+    /// Binary and modify/delete conflicts leave no markers; a retry must not
+    /// silently take the session's side, only an explicit `git add`/`git rm`.
+    #[tokio::test]
+    async fn markerless_conflicts_stay_unresolved_until_staged() {
+        let f = fixture("a\n");
+        fs::write(f.repo.join("bin.dat"), b"\0base").unwrap();
+        git_cmd(&f.repo, &["add", "bin.dat"]);
+        git_cmd(&f.repo, &["commit", "-q", "-m", "bin"]);
+        git_cmd(wt(&f), &["merge", "-q", "main"]);
+
+        fs::write(wt(&f).join("bin.dat"), b"\0session").unwrap();
+        fs::remove_file(wt(&f).join("f.txt")).unwrap();
+        git_cmd(wt(&f), &["commit", "-q", "-am", "session"]);
+        fs::write(f.repo.join("bin.dat"), b"\0project").unwrap();
+        fs::write(f.repo.join("f.txt"), "project\n").unwrap();
+        git_cmd(&f.repo, &["commit", "-q", "-am", "project"]);
+
+        let error = merge_now(&f).await.unwrap_err();
+        assert_eq!(error.code, "WORKTREE_CONFLICT");
+        let error = merge_now(&f).await.unwrap_err();
+        assert_eq!(error.code, "WORKTREE_CONFLICT");
+        assert_eq!(error.files, vec!["bin.dat", "f.txt"]);
+        assert_eq!(
+            fs::read(f.repo.join("bin.dat")).unwrap(),
+            b"\0project".to_vec()
+        );
+
+        git_cmd(wt(&f), &["add", "bin.dat"]);
+        git_cmd(wt(&f), &["rm", "-q", "f.txt"]);
+        assert!(matches!(
+            merge_now(&f).await.unwrap(),
+            MergeOutcome::Merged { .. }
+        ));
+        assert!(!f.repo.join("f.txt").exists());
+    }
+
+    /// A tag named like the owner branch does not redirect the merge.
+    #[tokio::test]
+    async fn a_tag_named_like_the_owner_branch_is_ignored() {
+        let f = fixture("a\n");
+        git_cmd(&f.repo, &["tag", "main"]);
+        fs::write(f.repo.join("later.txt"), "later\n").unwrap();
+        git_cmd(&f.repo, &["add", "later.txt"]);
+        git_cmd(&f.repo, &["commit", "-q", "-m", "later"]);
+        fs::write(wt(&f).join("f.txt"), "A\n").unwrap();
+
+        let git = GitRunner::default();
+        let preview = preview(&git, &f.row).await.unwrap();
+        assert_eq!(preview.files.len(), 1, "{:?}", preview.files);
+        assert!(matches!(
+            merge_now(&f).await.unwrap(),
+            MergeOutcome::Merged { .. }
+        ));
+        assert_eq!(
+            fs::read_to_string(f.repo.join("later.txt")).unwrap(),
+            "later\n"
+        );
+        assert_eq!(fs::read_to_string(f.repo.join("f.txt")).unwrap(), "A\n");
     }
 
     #[test]

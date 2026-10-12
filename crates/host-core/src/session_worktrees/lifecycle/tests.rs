@@ -405,3 +405,41 @@ async fn a_running_session_is_neither_merged_nor_deleted() {
         "WORKTREE_BUSY"
     );
 }
+
+/// A pre-existing branch with the session's name is refused, and the failed
+/// creation never deletes it.
+#[tokio::test]
+async fn an_existing_branch_blocks_creation_without_being_deleted() {
+    let env = env();
+    let session = new_session(&env, &env.project).await;
+    let branch = format!("{BRANCH_NAMESPACE}/{}", short_id(&session));
+    git_cmd(&env.project, &["branch", &branch]);
+
+    let error = create_session_worktree(
+        &env.state,
+        &env.git,
+        &session,
+        &env.project.to_string_lossy(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "WORKTREE_PATH_EXISTS");
+    assert!(git_cmd(&env.project, &["branch", "--list"]).contains(&branch));
+    assert!(registry::for_session(&env.state.lock().await.db, &session)
+        .unwrap()
+        .is_empty());
+}
+
+/// When the owner branch is gone, unmerged session commits are still
+/// reported for the delete confirmation instead of counting as zero.
+#[tokio::test]
+async fn pending_work_counts_commits_after_the_owner_branch_is_renamed() {
+    let env = env();
+    let (session, _created, root) = isolated(&env).await;
+    fs::write(root.join("f.txt"), "edit\n").unwrap();
+    git_cmd(&root, &["commit", "-q", "-am", "work"]);
+    git_cmd(&env.project, &["branch", "-m", "main", "renamed"]);
+
+    let pending = pending_work(&env.state, &env.git, &session).await.unwrap();
+    assert_eq!(pending.unmerged_commits, 1);
+}

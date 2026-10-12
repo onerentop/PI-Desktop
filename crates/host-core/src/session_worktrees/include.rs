@@ -68,6 +68,12 @@ pub async fn copy_included(
             continue;
         }
         let target = worktree.join(relative);
+        // The checked-out branch may contain links at these paths; never
+        // write through one to a location outside the worktree.
+        if destination_has_link(worktree, relative) {
+            report.skipped_links.push(relative.to_string());
+            continue;
+        }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -75,6 +81,34 @@ pub async fn copy_included(
         report.copied.push(relative.to_string());
     }
     Ok(report)
+}
+
+/// Whether `relative` or any of its parent directories inside `worktree` is a
+/// symbolic link (or, on Windows, a junction or other reparse point).
+fn destination_has_link(worktree: &Path, relative: &str) -> bool {
+    let mut current = worktree.to_path_buf();
+    for component in Path::new(relative).components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if is_link(&metadata) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn is_link(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 /// The subset of `paths` that the repository's standard ignore rules ignore.
@@ -188,5 +222,33 @@ mod tests {
         assert!(report.copied.is_empty());
         assert_eq!(report.skipped_links, vec![".env"]);
         assert!(!worktree.join(".env").exists());
+    }
+
+    /// A link already in the worktree (for example committed on the branch)
+    /// is never written through, even at an included path.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn links_in_the_worktree_are_never_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("repo"));
+        fs::write(repo.join(".gitignore"), ".env\ncerts/\n").unwrap();
+        fs::write(repo.join(INCLUDE_FILE), ".env\ncerts/**\n").unwrap();
+        fs::write(repo.join(".env"), "SECRET").unwrap();
+        fs::create_dir_all(repo.join("certs")).unwrap();
+        fs::write(repo.join("certs/a.pem"), "PEM").unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("victim"), "keep").unwrap();
+        let worktree = dir.path().join("wt");
+        fs::create_dir_all(&worktree).unwrap();
+        std::os::unix::fs::symlink(outside.join("victim"), worktree.join(".env")).unwrap();
+        std::os::unix::fs::symlink(&outside, worktree.join("certs")).unwrap();
+
+        let report = copy_included(&GitRunner::default(), &repo, &worktree)
+            .await
+            .unwrap();
+        assert!(report.copied.is_empty(), "{report:?}");
+        assert_eq!(fs::read_to_string(outside.join("victim")).unwrap(), "keep");
+        assert!(!outside.join("a.pem").exists());
     }
 }

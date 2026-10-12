@@ -239,6 +239,50 @@ fn summary_of(row: &WorktreeRow) -> WorktreeSummary {
 
 // ---- create -----------------------------------------------------------------
 
+/// Refuse a branch name that already exists, so cleanup after a failed
+/// creation never deletes a branch this call did not create.
+pub(super) async fn ensure_branch_free(
+    git: &GitRunner,
+    repo_dir: &Path,
+    branch: &str,
+) -> Result<(), WorktreeError> {
+    let taken = git
+        .output(
+            repo_dir,
+            &["show-ref", "--verify", "--quiet", &merge::head_ref(branch)],
+        )
+        .await?
+        .success();
+    if taken {
+        return Err(WorktreeError::new(
+            "WORKTREE_PATH_EXISTS",
+            format!("branch `{branch}` already exists"),
+        ));
+    }
+    Ok(())
+}
+
+/// Undo a failed creation. The row (still `creating`) stays when cleanup
+/// fails, so the startup or orphan pass retries it instead of leaving an
+/// unrecorded directory and branch behind.
+pub(super) async fn discard_failed_creation(
+    state: &SharedState,
+    git: &GitRunner,
+    row: &WorktreeRow,
+) {
+    match remove_worktree(git, row).await {
+        Ok(()) => {
+            let st = state.lock().await;
+            if let Err(error) = registry::remove(&st.db, &row.id) {
+                tracing::warn!(%error, "could not unregister a failed worktree creation");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %row.path, "could not clean up a failed worktree creation")
+        }
+    }
+}
+
 /// Create the session's own worktree from the project's current branch tip,
 /// copy `.worktreeinclude` files, and start the optional setup command in the
 /// background. On failure nothing is left behind.
@@ -266,6 +310,7 @@ pub async fn create_session_worktree(
         ));
     }
     let branch = format!("{BRANCH_NAMESPACE}/{name}");
+    ensure_branch_free(git, project, &branch).await?;
     let root_text = root.to_string_lossy().into_owned();
     let common_dir = repo.common_dir.to_string_lossy().into_owned();
 
@@ -297,7 +342,7 @@ pub async fn create_session_worktree(
                 "-b",
                 &branch,
                 &root_text,
-                &repo.branch,
+                &merge::head_ref(&repo.branch),
             ],
         )
         .await?;
@@ -319,11 +364,7 @@ pub async fn create_session_worktree(
     let included = match created {
         Ok(included) => included,
         Err(error) => {
-            if let Err(cleanup) = remove_worktree(git, &row).await {
-                tracing::warn!(%cleanup, "could not clean up a failed worktree creation");
-            }
-            let st = state.lock().await;
-            let _ = registry::remove(&st.db, &row.id);
+            discard_failed_creation(state, git, &row).await;
             return Err(error);
         }
     };
@@ -521,6 +562,53 @@ pub async fn merge_session(
 
 // ---- remove -----------------------------------------------------------------
 
+/// Commits on `row`'s branch that its owner branch lacks. When the owner
+/// branch is gone, counts commits no other local branch has, so the delete
+/// confirmation never reports lost work as zero. Runs in the repository, so
+/// it also works when the worktree folder vanished.
+pub(super) async fn unmerged_commits(
+    git: &GitRunner,
+    row: &WorktreeRow,
+) -> Result<u64, WorktreeError> {
+    let common_dir = Path::new(&row.common_dir);
+    let branch = merge::head_ref(&row.branch);
+    let branch_exists = git
+        .run_git_dir(common_dir, &["show-ref", "--verify", "--quiet", &branch])
+        .await
+        .is_ok();
+    if !branch_exists {
+        return Ok(0);
+    }
+    let range = format!("{}..{}", merge::head_ref(&row.owner_branch), branch);
+    let count = match git
+        .run_git_dir(common_dir, &["rev-list", "--count", &range])
+        .await
+    {
+        Ok(count) => count,
+        Err(_) => {
+            let exclude = format!("--exclude={}", row.branch);
+            git.run_git_dir(
+                common_dir,
+                &[
+                    "rev-list",
+                    "--count",
+                    &branch,
+                    "--not",
+                    &exclude,
+                    "--branches",
+                ],
+            )
+            .await?
+        }
+    };
+    count.trim().parse().map_err(|_| {
+        WorktreeError::new(
+            "WORKTREE_GIT_FAILED",
+            format!("unexpected rev-list output: {}", count.trim()),
+        )
+    })
+}
+
 /// Unmerged commits and uncommitted changes across every worktree of the
 /// session, for the delete confirmation.
 pub async fn pending_work(
@@ -535,10 +623,7 @@ pub async fn pending_work(
         if !root.is_dir() {
             continue;
         }
-        let range = format!("{}..{}", row.owner_branch, row.branch);
-        if let Ok(count) = git.run(root, &["rev-list", "--count", &range]).await {
-            pending.unmerged_commits += count.trim().parse::<u64>().unwrap_or(0);
-        }
+        pending.unmerged_commits += unmerged_commits(git, &row).await?;
         if !merge::worktree_status(git, root).await?.is_empty() {
             pending.uncommitted_changes = true;
         }

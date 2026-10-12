@@ -19,13 +19,13 @@ use serde::Serialize;
 use super::git::GitRunner;
 use super::include::copy_included;
 use super::lifecycle::{
-    env_for, missing_error, port_is_free, run_setup, setup_command, short_id, SharedState,
-    WorktreeSummary,
+    discard_failed_creation, ensure_branch_free, env_for, missing_error, port_is_free, run_setup,
+    setup_command, short_id, unmerged_commits, SharedState, WorktreeSummary,
 };
 use super::merge::{self, commit_all, commits_ahead, land, merge_in_progress};
 use super::probe::BRANCH_NAMESPACE;
 use super::registry::{self, NewWorktree, SetupStatus, WorktreeRow, WorktreeStatus};
-use super::remove::remove_worktree;
+use super::remove::{drop_admin_entry, remove_worktree};
 use super::{repo_lock, WorktreeError};
 use crate::db::Database;
 use crate::sessions;
@@ -130,6 +130,52 @@ async fn checkpoint_session(
     Ok(permit)
 }
 
+/// Re-create a vanished delegate worktree on its existing branch so the
+/// subagent's committed work survives a resume; `None` when the branch is
+/// gone too. The caller holds the repo lock.
+async fn reattach(
+    state: &SharedState,
+    git: &GitRunner,
+    session: &WorktreeRow,
+    row: WorktreeRow,
+) -> Result<Option<WorktreeRow>, WorktreeError> {
+    let common_dir = Path::new(&row.common_dir);
+    let branch_exists = git
+        .run_git_dir(
+            common_dir,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &merge::head_ref(&row.branch),
+            ],
+        )
+        .await
+        .is_ok();
+    if !branch_exists {
+        return Ok(None);
+    }
+    drop_admin_entry(common_dir, Path::new(&row.path))?;
+    git.run(
+        Path::new(&session.path),
+        &["worktree", "add", "-q", &row.path, &row.branch],
+    )
+    .await?;
+    git.run(
+        Path::new(&row.path),
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "PI-Desktop subagent",
+            &row.path,
+        ],
+    )
+    .await?;
+    let st = state.lock().await;
+    registry::set_status(&st.db, &row.id, WorktreeStatus::Active)?;
+    Ok(Some(registry::get(&st.db, &row.id)?.unwrap_or(row)))
+}
 /// Create (or, for a resumed subagent, reuse) a delegate worktree branched from
 /// the session's current state.
 pub async fn create_delegate_worktree(
@@ -141,10 +187,15 @@ pub async fn create_delegate_worktree(
     let session = session_row(state, session_id).await?;
     let existing = registry::for_owner(&state.lock().await.db, session_id, Some(delegation_id))?;
     if let Some(row) = existing {
-        if Path::new(&row.path).is_dir() {
-            return Ok(summary(&row));
-        }
         let _guard = repo_lock::lock(Path::new(&row.common_dir)).await;
+        if row.status != WorktreeStatus::Creating {
+            if Path::new(&row.path).is_dir() {
+                return Ok(summary(&row));
+            }
+            if let Some(row) = reattach(state, git, &session, row.clone()).await? {
+                return Ok(summary(&row));
+            }
+        }
         remove_worktree(git, &row).await?;
         registry::remove(&state.lock().await.db, &row.id)?;
     }
@@ -174,6 +225,7 @@ pub async fn create_delegate_worktree(
         ));
     }
     let branch = format!("{BRANCH_NAMESPACE}/{name}");
+    ensure_branch_free(git, Path::new(&session.path), &branch).await?;
     let root_text = root.to_string_lossy().into_owned();
     let project_path = sessions::session_summary(&state.lock().await.db, session_id)?
         .and_then(|summary| summary.project_path);
@@ -207,7 +259,7 @@ pub async fn create_delegate_worktree(
                 "-b",
                 &branch,
                 &root_text,
-                &session.branch,
+                &merge::head_ref(&session.branch),
             ],
         )
         .await?;
@@ -232,10 +284,7 @@ pub async fn create_delegate_worktree(
     }
     .await;
     if let Err(error) = created {
-        if let Err(cleanup) = remove_worktree(git, &row).await {
-            tracing::warn!(%cleanup, "could not clean up a failed subagent worktree");
-        }
-        let _ = registry::remove(&state.lock().await.db, &row.id);
+        discard_failed_creation(state, git, &row).await;
         return Err(error);
     }
 
@@ -276,6 +325,12 @@ pub async fn settle_delegate_worktree(
     let _guard = repo_lock::lock(Path::new(&row.common_dir)).await;
     let worktree = Path::new(&row.path);
     if !worktree.is_dir() {
+        // The folder vanished; its branch may still hold committed work,
+        // which a resume re-attaches instead of deleting.
+        if unmerged_commits(git, &row).await? > 0 {
+            registry::set_status(&state.lock().await.db, &row.id, WorktreeStatus::Missing)?;
+            return Ok(DelegateSettlement::Kept);
+        }
         drop_row(state, git, &row).await?;
         return Ok(DelegateSettlement::NoChanges);
     }
