@@ -32,3 +32,49 @@ pub fn init_repo(path: &Path) -> PathBuf {
     git_cmd(path, &["commit", "-q", "-m", "init"]);
     path.to_path_buf()
 }
+
+/// A directory link: a symbolic link on Unix, a junction on Windows. Junctions
+/// need no privilege, and they are the link Git for Windows follows during
+/// `git worktree remove --force`.
+pub fn link_dir(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        // `mklink` reads a `/` inside a path as a switch.
+        let native = |path: &Path| path.to_string_lossy().replace('/', "\\");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(native(link))
+            .arg(native(target))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "junction creation failed: {output:?}"
+        );
+    }
+}
+
+/// A file symbolic link. Windows allows it only with Developer Mode or
+/// elevation; without that privilege this returns false so the caller skips
+/// just its file-link assertions.
+pub fn try_link_file(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+    #[cfg(windows)]
+    {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                eprintln!("file symlinks need Developer Mode; skipping that case");
+                false
+            }
+            Err(error) => panic!("file symlink failed: {error}"),
+        }
+    }
+}

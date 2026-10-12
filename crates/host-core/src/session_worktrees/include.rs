@@ -60,7 +60,9 @@ pub async fn copy_included(
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
-        if metadata.file_type().is_symlink() {
+        // Git for Windows lists files inside a junction as ordinary paths, so
+        // every component is checked, not only the entry itself.
+        if has_link_component(toplevel, relative) {
             report.skipped_links.push(relative.to_string());
             continue;
         }
@@ -70,7 +72,7 @@ pub async fn copy_included(
         let target = worktree.join(relative);
         // The checked-out branch may contain links at these paths; never
         // write through one to a location outside the worktree.
-        if destination_has_link(worktree, relative) {
+        if has_link_component(worktree, relative) {
             report.skipped_links.push(relative.to_string());
             continue;
         }
@@ -83,10 +85,10 @@ pub async fn copy_included(
     Ok(report)
 }
 
-/// Whether `relative` or any of its parent directories inside `worktree` is a
+/// Whether `relative` or any of its parent directories inside `root` is a
 /// symbolic link (or, on Windows, a junction or other reparse point).
-fn destination_has_link(worktree: &Path, relative: &str) -> bool {
-    let mut current = worktree.to_path_buf();
+fn has_link_component(root: &Path, relative: &str) -> bool {
+    let mut current = root.to_path_buf();
     for component in Path::new(relative).components() {
         current.push(component);
         match fs::symlink_metadata(&current) {
@@ -143,7 +145,7 @@ async fn ignored_by_git(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_worktrees::test_support::{git_cmd, init_repo};
+    use crate::session_worktrees::test_support::{git_cmd, init_repo, link_dir, try_link_file};
 
     /// AC18: only ignored files that match `.worktreeinclude` are copied.
     #[tokio::test]
@@ -205,7 +207,6 @@ mod tests {
         assert!(!worktree.join(".env").exists());
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn symbolic_links_are_reported_and_not_followed() {
         let dir = tempfile::tempdir().unwrap();
@@ -213,7 +214,9 @@ mod tests {
         fs::write(repo.join(".gitignore"), ".env\n").unwrap();
         fs::write(repo.join(INCLUDE_FILE), ".env\n").unwrap();
         fs::write(dir.path().join("secret"), "S").unwrap();
-        std::os::unix::fs::symlink(dir.path().join("secret"), repo.join(".env")).unwrap();
+        if !try_link_file(&dir.path().join("secret"), &repo.join(".env")) {
+            return;
+        }
         let worktree = dir.path().join("wt");
         fs::create_dir_all(&worktree).unwrap();
         let report = copy_included(&GitRunner::default(), &repo, &worktree)
@@ -224,9 +227,32 @@ mod tests {
         assert!(!worktree.join(".env").exists());
     }
 
+    /// A linked directory in the project (a junction on Windows) is not
+    /// walked, so files outside the project are never copied in. Git for
+    /// Windows lists the files inside a junction; git on Unix lists a
+    /// symlinked directory as one entry, so this guards the Windows path.
+    #[tokio::test]
+    async fn a_linked_project_directory_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("repo"));
+        fs::write(repo.join(".gitignore"), "certs\n").unwrap();
+        fs::write(repo.join(INCLUDE_FILE), "certs/**\n").unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("a.pem"), "OUTSIDE").unwrap();
+        link_dir(&outside, &repo.join("certs"));
+        let worktree = dir.path().join("wt");
+        fs::create_dir_all(&worktree).unwrap();
+        let report = copy_included(&GitRunner::default(), &repo, &worktree)
+            .await
+            .unwrap();
+        assert!(report.copied.is_empty(), "{report:?}");
+        assert!(!worktree.join("certs").exists());
+    }
+
     /// A link already in the worktree (for example committed on the branch)
-    /// is never written through, even at an included path.
-    #[cfg(unix)]
+    /// is never written through, even at an included path. On Windows the
+    /// directory link is a junction, which only the reparse-point check sees.
     #[tokio::test]
     async fn links_in_the_worktree_are_never_written_through() {
         let dir = tempfile::tempdir().unwrap();
@@ -241,13 +267,18 @@ mod tests {
         fs::write(outside.join("victim"), "keep").unwrap();
         let worktree = dir.path().join("wt");
         fs::create_dir_all(&worktree).unwrap();
-        std::os::unix::fs::symlink(outside.join("victim"), worktree.join(".env")).unwrap();
-        std::os::unix::fs::symlink(&outside, worktree.join("certs")).unwrap();
+        let file_link = try_link_file(&outside.join("victim"), &worktree.join(".env"));
+        link_dir(&outside, &worktree.join("certs"));
 
         let report = copy_included(&GitRunner::default(), &repo, &worktree)
             .await
             .unwrap();
-        assert!(report.copied.is_empty(), "{report:?}");
+        let expected: Vec<String> = if file_link {
+            Vec::new()
+        } else {
+            vec![".env".to_string()]
+        };
+        assert_eq!(report.copied, expected, "{report:?}");
         assert_eq!(fs::read_to_string(outside.join("victim")).unwrap(), "keep");
         assert!(!outside.join("a.pem").exists());
     }
