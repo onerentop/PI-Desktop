@@ -178,6 +178,13 @@ async fn each_worktree_gets_its_own_port_block_and_environment() {
     );
 }
 
+/// The setup command runs in the default command shell, which is PowerShell
+/// on Windows and bash elsewhere, so each command is written per dialect.
+fn default_shell_is_powershell() -> bool {
+    crate::tools::shell::dialect_for_id(crate::tools::shell::default_shell_id())
+        == Some("powershell")
+}
+
 /// AC3 + AC15: the setup command runs in the new worktree with the project
 /// root available; a failure is recorded and the session stays usable.
 #[tokio::test]
@@ -191,12 +198,14 @@ async fn the_setup_command_runs_once_and_its_failure_does_not_block() {
         let st = env.state.lock().await;
         let session = new_session_blocking(&st.db, &env.project);
         drop(session);
-        assert!(set_setup_command(
-            &st.db,
-            &env.project.to_string_lossy(),
-            Some("cp \"$PI_PROJECT_ROOT/.env\" .env && printf %s \"$PI_PORT\" > port.txt && echo prepared"),
-        )
-        .unwrap());
+        let command = if default_shell_is_powershell() {
+            "Copy-Item \"$env:PI_PROJECT_ROOT/.env\" .env; \
+             Set-Content -NoNewline -Path port.txt -Value $env:PI_PORT; \
+             Write-Output prepared"
+        } else {
+            "cp \"$PI_PROJECT_ROOT/.env\" .env && printf %s \"$PI_PORT\" > port.txt && echo prepared"
+        };
+        assert!(set_setup_command(&st.db, &env.project.to_string_lossy(), Some(command)).unwrap());
     }
     let (session, created, root) = isolated(&env).await;
     assert_eq!(created.worktree.setup_status, Some(SetupStatus::Running));
@@ -216,12 +225,12 @@ async fn the_setup_command_runs_once_and_its_failure_does_not_block() {
 
     {
         let st = env.state.lock().await;
-        set_setup_command(
-            &st.db,
-            &env.project.to_string_lossy(),
-            Some("echo broken >&2; exit 3"),
-        )
-        .unwrap();
+        let failing = if default_shell_is_powershell() {
+            "[Console]::Error.WriteLine('broken'); exit 3"
+        } else {
+            "echo broken >&2; exit 3"
+        };
+        set_setup_command(&st.db, &env.project.to_string_lossy(), Some(failing)).unwrap();
     }
     let (failing, _, _) = isolated(&env).await;
     let row = wait_for_setup(&env, &failing).await;

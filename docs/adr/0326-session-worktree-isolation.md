@@ -117,5 +117,7 @@ sync from project, behind counts, conflict-status refresh, the session hold,
 hook suppression, link-safe removal, orphan cleanup, `.worktreeinclude`, port
 assignment, and repository-subdirectory projects; IPC, renderer, and Electron
 user-path tests cover the sidebar. `pnpm test:e2e:worktree-live` runs the
-lifecycle against a real model. Windows junction removal, long paths, and
-locked-file removal require Windows E2E.
+lifecycle against a real model. The hook-suppression, link-safe removal, and
+`.worktreeinclude` link tests also run on Windows with directory junctions,
+where Git for Windows runs hooks without an executable bit and lists files
+inside a junction. Long paths and locked-file removal require Windows E2E.

@@ -316,6 +316,11 @@ type ReviewChange = {
   项目路径为键；
 - Bash 获得 `PI_PORT`（41000–48999 中一个 10 端口块的首端口）、`PI_PROJECT_ROOT`
   和 `PI_WORKTREE_ROOT`；
+- 可选的项目初始化命令在每个新 worktree 中运行一次，带同样的变量，使用用户的默认命令
+  shell（`defaultCommandShell`，未设置时用平台默认：Windows 上为 Windows PowerShell，
+  其他平台为 bash）。命令不会在方言之间转换，因此在 Windows 上必须使用 PowerShell 语法
+  （`$env:PI_PORT`；Windows PowerShell 5.1 用 `;` 而不是 `&&`），除非默认 shell 配置为
+  Git Bash 等 POSIX shell；
 - 宿主在 worktree 中运行的 git 命令禁用 hooks 和 fsmonitor，删除时绝不跟随链接越出
   worktree。
 

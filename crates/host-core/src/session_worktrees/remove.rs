@@ -145,7 +145,7 @@ pub(super) fn drop_admin_entry(common_dir: &Path, root: &Path) -> io::Result<()>
 mod tests {
     use super::*;
     use crate::session_worktrees::registry::{WorktreeRow, WorktreeStatus};
-    use crate::session_worktrees::test_support::{git_cmd, init_repo};
+    use crate::session_worktrees::test_support::{git_cmd, init_repo, link_dir, try_link_file};
 
     fn row_for(repo: &Path, worktree: &Path, branch: &str) -> WorktreeRow {
         WorktreeRow {
@@ -166,8 +166,9 @@ mod tests {
         }
     }
 
-    /// AC14: a link to a directory outside the worktree survives removal.
-    #[cfg(unix)]
+    /// AC14: a link to a directory outside the worktree survives removal. On
+    /// Windows the directory links are junctions, which Git for Windows
+    /// follows during `git worktree remove --force`.
     #[tokio::test]
     async fn removal_deletes_links_without_touching_their_targets() {
         let dir = tempfile::tempdir().unwrap();
@@ -189,11 +190,10 @@ mod tests {
                 "main",
             ],
         );
-        std::os::unix::fs::symlink(&outside, worktree.join("linked")).unwrap();
+        link_dir(&outside, &worktree.join("linked"));
         fs::create_dir_all(worktree.join("deep")).unwrap();
-        std::os::unix::fs::symlink(&outside, worktree.join("deep/linked")).unwrap();
-        std::os::unix::fs::symlink(outside.join("KEEP_ME.txt"), worktree.join("file-link"))
-            .unwrap();
+        link_dir(&outside, &worktree.join("deep/linked"));
+        try_link_file(&outside.join("KEEP_ME.txt"), &worktree.join("file-link"));
 
         remove_worktree(
             &GitRunner::default(),

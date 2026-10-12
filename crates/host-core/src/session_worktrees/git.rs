@@ -278,11 +278,10 @@ mod tests {
 
     /// AC13: a hook file the agent could write with Write/Edit alone (a
     /// relative, husky-style `core.hooksPath` inside the worktree) must not run
-    /// when host-core commits, checks out, or merges.
-    #[cfg(unix)]
+    /// when host-core commits, checks out, or merges. Git for Windows runs
+    /// such a hook through its bundled `sh` without an executable bit.
     #[tokio::test]
     async fn host_initiated_commit_and_merge_never_run_repository_hooks() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let repo = init_repo(dir.path());
         let git = GitRunner::default();
@@ -290,6 +289,8 @@ mod tests {
             .await
             .unwrap();
         let marker = dir.path().join("hook-ran");
+        // `sh` on Windows takes forward slashes.
+        let marker_for_sh = marker.display().to_string().replace('\\', "/");
         let hooks = repo.join(".husky/_");
         std::fs::create_dir_all(&hooks).unwrap();
         for hook in [
@@ -304,10 +305,14 @@ mod tests {
             let script = hooks.join(hook);
             std::fs::write(
                 &script,
-                format!("#!/bin/sh\necho {hook} >> '{}'\nexit 1\n", marker.display()),
+                format!("#!/bin/sh\necho {hook} >> '{marker_for_sh}'\nexit 1\n"),
             )
             .unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         std::fs::write(repo.join("a.txt"), "a").unwrap();
         commit_all_with(&git, &repo, "a").await;

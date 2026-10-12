@@ -118,15 +118,22 @@ async fn isolated_session_user_path_from_create_to_delete() {
     ));
 
     let env_map: HashMap<_, _> = env.iter().cloned().collect();
+    // Bash runs in the default command shell: PowerShell on Windows.
+    let shell_id = crate::tools::shell::default_shell_id();
+    let probe = if crate::tools::shell::dialect_for_id(shell_id) == Some("powershell") {
+        "(Get-Location).Path; Write-Output $env:PI_PORT"
+    } else {
+        "pwd; printf %s \"$PI_PORT\""
+    };
     let bash = crate::tools::execute_tool_with_path_access(
         Some(&root),
         None,
         "Bash",
-        &json!({ "command": "pwd; printf %s \"$PI_PORT\"" }),
+        &json!({ "command": probe }),
         tool_options(Some(crate::tools::BashExecutionOptions {
             session_id: session_id.clone(),
             tool_call_id: "t1".into(),
-            command_shell_id: crate::tools::shell::default_shell_id().into(),
+            command_shell_id: shell_id.into(),
             timeout_ms: None,
             cancellation: None,
             output_tx: None,

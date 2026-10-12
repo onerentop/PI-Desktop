@@ -98,6 +98,16 @@ const host = new Host(resolveHostBinary(), dataDir, { quiet: true });
 const runtimes = new Map();
 let provider;
 
+// The platform's default command shell, as host-core resolves it: Windows
+// PowerShell on Windows (the `bash` id does not exist there), bash elsewhere.
+const windows = process.platform === "win32";
+const commandShell = windows
+  ? { id: "windows-powershell", label: "Windows PowerShell", dialect: "powershell", available: true, isDefault: true }
+  : { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true };
+const portCommand = windows
+  ? 'Set-Content -NoNewline -Path port.txt -Value "$env:PI_PORT|$env:PI_WORKTREE_ROOT"'
+  : "printf '%s|%s' \"$PI_PORT\" \"$PI_WORKTREE_ROOT\" > port.txt";
+
 const writer = {
   name: "writer",
   description: "Creates or edits files exactly as instructed.",
@@ -150,7 +160,7 @@ async function prompt(session, text, { subagents } = {}) {
         supportedThinkingLevels: ["off"],
       },
       thinkingLevel: "off",
-      commandShell: { id: "bash", label: "Bash", dialect: "posix", available: true, isDefault: true },
+      commandShell,
       onEvent: (e) => session.events?.push(e.event),
     });
     runtimes.set(session.sessionId, runtime);
@@ -211,7 +221,7 @@ try {
   const task = (letter) =>
     `In the current workspace: 1) Use Edit or Write so that the first line of f.txt is exactly "${letter}" ` +
     `(keep the second line). 2) Create ${letter.toLowerCase()}.txt containing exactly "from-${letter.toLowerCase()}". ` +
-    `3) Run this Bash command: printf '%s|%s' "$PI_PORT" "$PI_WORKTREE_ROOT" > port.txt . Then reply DONE.`;
+    `3) Run this Bash command: ${portCommand} . Then reply DONE.`;
   await Promise.all([prompt(a, task("A")), prompt(b, task("B"))]);
   record("parallel-edits-isolated",
     firstLine(join(a.root, "f.txt")) === "A" && firstLine(join(b.root, "f.txt")) === "B" &&
