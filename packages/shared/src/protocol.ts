@@ -136,6 +136,16 @@ export const IPC = {
     /** Validate and select a durable session from a reviewed host operation. */
     sessionOpen: "pi-desktop/session/open",
     sessionDelete: "pi-desktop/session/delete",
+    /** Isolated sessions in git worktrees (ADR 0326). */
+    worktreeProbe: "pi-desktop/worktree/probe",
+    worktreePreview: "pi-desktop/worktree/preview",
+    worktreeMerge: "pi-desktop/worktree/merge",
+    worktreePendingWork: "pi-desktop/worktree/pendingWork",
+    worktreeSetupLog: "pi-desktop/worktree/setupLog",
+    /** Opens the worktree folder in the OS file manager; no path is returned. */
+    worktreeReveal: "pi-desktop/worktree/reveal",
+    worktreeSetupCommandGet: "pi-desktop/worktree/setupCommand/get",
+    worktreeSetupCommandSet: "pi-desktop/worktree/setupCommand/set",
     sessionRename: "pi-desktop/session/rename",
     /** Deterministic first-prompt title for a session that is still untitled. */
     sessionDeriveTitle: "pi-desktop/session/deriveTitle",

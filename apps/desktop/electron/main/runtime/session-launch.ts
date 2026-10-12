@@ -251,6 +251,25 @@ export function createSessionLaunchRuntime({
     return catalog;
   }
 
+  /**
+   * The worktree root of an isolated session, resolved by host-core from its
+   * own registry; `undefined` for every other session. A missing worktree
+   * fails the launch instead of silently falling back to the main checkout.
+   */
+  async function isolatedWorkspaceRoot(
+    sessionId: string,
+    session: { worktree?: unknown } | null | undefined,
+  ): Promise<string | undefined> {
+    if (!session?.worktree) return undefined;
+    if (!runtimeState.host) throw new Error("host unavailable");
+    const result = await runtimeState.host.call<{ path?: string }>("worktree.location", {
+      sessionId,
+    });
+    const root = typeof result.path === "string" ? result.path.trim() : "";
+    if (!root) throw new Error("isolated worktree location unavailable");
+    return root;
+  }
+
   async function resolveAgentRuntimeLaunch(
     sessionId: string,
     session: any,
@@ -374,7 +393,11 @@ export function createSessionLaunchRuntime({
       typeof session.projectPath === "string" && session.projectPath.trim()
         ? session.projectPath.trim()
         : undefined;
-    let projectInstructions = await loadInstructionChain(projectPath);
+    // ADR 0326: an isolated session reads and writes files in its worktree.
+    // `projectPath` stays the project identity (memory, skills, plugins, MCP,
+    // subagents, group context); only files follow `workspaceRoot`.
+    const workspaceRoot = await isolatedWorkspaceRoot(sessionId, session);
+    let projectInstructions = await loadInstructionChain(workspaceRoot ?? projectPath);
     // pi-compatible SYSTEM.md / APPEND_SYSTEM.md (issue #542): resolved once
     // per launch; a change retires the runtime through the reuse match.
     const customSystemPrompt = await loadCustomSystemPrompt(projectPath);
@@ -389,7 +412,9 @@ export function createSessionLaunchRuntime({
           } | null;
         }>("project.group.context", { path: projectPath });
         const groupRoots = result.context?.roots ?? [];
-        const groupRootGuide = groupRoots.length > 1
+        // An isolated session's root is its worktree; the group's other roots
+        // are outside it and are not advertised (ADR 0326).
+        const groupRootGuide = !workspaceRoot && groupRoots.length > 1
           ? [
               `Primary root: ${groupRoots[0]?.path ?? projectPath}`,
               ...groupRoots.slice(1).map((root) => `Additional root: ${root.path}`),
@@ -635,6 +660,7 @@ export function createSessionLaunchRuntime({
       providerId: provider.id,
       modelId,
       projectPath,
+      workspaceRoot,
       sidecarParams: {
         sessionId,
         mode,
@@ -646,6 +672,7 @@ export function createSessionLaunchRuntime({
         scratchDir: join(dataDir, "scratch", sessionId),
         attachmentsDir: join(dataDir, "attachments"),
         projectPath,
+        ...(workspaceRoot ? { workspaceRoot } : {}),
         customSystemPrompt,
         projectInstructions,
         projectMemory,

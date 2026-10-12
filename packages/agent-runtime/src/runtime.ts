@@ -976,6 +976,11 @@ export type AgentRuntimeOptions = {
   customSystemPrompt?: CustomSystemPrompt;
   /** Session-bound workspace root used for path-scoped instruction requests. */
   projectPath?: string;
+  /**
+   * An isolated session's git worktree (ADR 0326). Files, the extension cwd,
+   * and edit bookkeeping use it; `projectPath` stays the project identity.
+   */
+  workspaceRoot?: string;
   /** Instructions resolved from the session's workspace. */
   projectInstructions?: ProjectInstructions;
   /** Durable project context loaded from host-owned project memory. */
@@ -1043,6 +1048,7 @@ export type RuntimeMatchConfig = {
   projectInstructions?: ProjectInstructions;
   projectMemory?: string;
   projectPath?: string;
+  workspaceRoot?: string;
   commandShell: CommandShellOption;
   subagents?: SubagentDefinition[];
   subagentProviders?: Record<string, RuntimeProviderConfig>;
@@ -1714,6 +1720,21 @@ function estimateVisibleResponseOutputTokens(
   return Math.max(1, Math.ceil(Array.from(visible).length / 4));
 }
 
+/**
+ * System-prompt rules for an isolated session (ADR 0326): the workspace is a
+ * separate git worktree that the user merges from the app.
+ */
+export function isolatedWorkspaceGuidance(): string {
+  return [
+    "Isolated session: the advertised workspace is a separate git worktree on its own branch; the user's main project checkout is outside it.",
+    "Edit, build, and test only inside this workspace and never change files in the main checkout.",
+    "The worktree is a fresh checkout, so install dependencies first when a build or test needs them.",
+    "Start dev servers only on the 10 ports beginning at the PI_PORT environment variable.",
+    "Do not switch branches, rebase, or reset in this worktree; the user merges its branch into the project from the app.",
+    "MCP tools act on the main project, not on this workspace.",
+  ].join(" ");
+}
+
 export class DesktopAgentRuntime {
   private agent: Agent;
   private models: Models;
@@ -1794,6 +1815,8 @@ export class DesktopAgentRuntime {
   private activationHydrated = false;
   private scratchDir?: string;
   private projectPath?: string;
+  /** Set only for an isolated session; see `RuntimeConfig.workspaceRoot`. */
+  private workspaceRoot?: string;
   private commandShell: CommandShellOption;
   private baseProjectInstructions?: ProjectInstructions;
   private projectInstructions?: ProjectInstructions;
@@ -1975,6 +1998,7 @@ export class DesktopAgentRuntime {
     this.commandShell = opts.commandShell;
     this.scratchDir = opts.scratchDir;
     this.projectPath = opts.projectPath?.trim() || undefined;
+    this.workspaceRoot = opts.workspaceRoot?.trim() || undefined;
     this.customSystemPrompt = opts.customSystemPrompt;
     this.baseProjectInstructions = opts.projectInstructions;
     this.projectInstructions = opts.projectInstructions;
@@ -2026,6 +2050,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
             `Your scratch directory for this session is \`${formatScratchDirForShell(this.commandShell, this.scratchDir)}\` (in Bash: ${shellScratchVariable(this.commandShell)}). Store ad-hoc temporary and intermediate files there using absolute paths. Workspace writes must be task-related project files or required toolchain outputs. Scratch persists across turns and is deleted with the session.`,
           ]
         : []),
+      // Isolated session (ADR 0326).
+      ...(this.workspaceRoot ? [isolatedWorkspaceGuidance()] : []),
     ];
     // A custom SYSTEM.md replaces only the product persona line, never the
     // operational rules in the default parts: tool guidance, delegation
@@ -2636,6 +2662,7 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         safeJson(config.customSystemPrompt ?? null) &&
       (this.projectMemory ?? "") === (config.projectMemory?.trim() ?? "") &&
       (this.projectPath ?? "") === (config.projectPath?.trim() ?? "") &&
+      (this.workspaceRoot ?? "") === (config.workspaceRoot?.trim() ?? "") &&
       // Editing `~/.agents/subagents/*.md` must reach the next prompt. Definition
       // bodies are part of the `Task` tool's behavior, so unlike skills they
       // are compared in full.
@@ -2789,7 +2816,8 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
    * path in place, because loading extensions must not fail the session.
    */
   private extensionCwd(): string {
-    if (this.projectPath) return this.projectPath;
+    const root = this.workspaceRoot ?? this.projectPath;
+    if (root) return root;
     if (!this.scratchDir) return process.cwd();
     try {
       mkdirSync(this.scratchDir, { recursive: true });
@@ -3316,7 +3344,10 @@ Do not invent objections or turn speculative risks into blockers. Stop when the 
         onUpdate,
       ) => {
         const mutationPath = PATH_MUTATING_TOOLS.has(toolName) && isRecord(params) && typeof params.path === "string"
-          ? await mutationFailureKey(params.path, this.projectPath ?? this.scratchDir)
+          ? await mutationFailureKey(
+              params.path,
+              this.workspaceRoot ?? this.projectPath ?? this.scratchDir,
+            )
           : undefined;
         await this.loadPathInstructions(toolName, params);
         const isBash = toolName === "Bash";

@@ -53,9 +53,18 @@ test("main serves BrowserPreview from its originating session workspace", () => 
     mainSource.indexOf("sidecar = s;"),
   );
   assert.match(handler, /async \(\{ args, sessionId \}\)/);
-  assert.match(handler, /host\?\.call\("session\.get", \{ id: sessionId \}\)/);
-  assert.match(handler, /res\?\.session\?\.projectPath/);
+  assert.match(handler, /root = await sessionFileRoot\(sessionId\)/);
   assert.doesNotMatch(handler, /workspace\.get/);
+  // The root comes from the durable session: its project, or the worktree of an
+  // isolated session resolved by host-core (ADR 0326).
+  const resolver = mainSource.slice(
+    mainSource.indexOf("const sessionFileRoot = async"),
+    mainSource.indexOf('s.setLocalTool("BrowserPreview"'),
+  );
+  assert.match(resolver, /"session\.get", \{ id: sessionId \}/);
+  assert.match(resolver, /res\?\.session\?\.projectPath/);
+  assert.match(resolver, /"worktree\.location", \{ sessionId \}/);
+  assert.doesNotMatch(resolver, /workspace\.get/);
   assert.match(handler, /browserHost\.previewWorkspaceFile\(sessionId, raw, root\)/);
   assert.ok(
     handler.indexOf("resolveLocalFile(raw, root)") <

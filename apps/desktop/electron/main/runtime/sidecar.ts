@@ -359,20 +359,39 @@ export function createSidecarRuntime({
 
   const s = new AgentSidecar((text) => logger.child("agent", text));
   wireSidecar(s);
-  s.setProjectInstructionResolver(async ({ projectPath, path }) => {
+  // The directory a session's file tools work in: its isolated worktree
+  // (ADR 0326), resolved by host-core from its own registry, or its project.
+  const sessionFileRoot = async (sessionId: string): Promise<string | null> => {
+    const host = runtimeState.host;
+    if (!host) return null;
+    const res = await host.call<{
+      session: { projectPath?: string; worktree?: unknown } | null;
+    }>("session.get", { id: sessionId });
+    if (res?.session?.worktree) {
+      const location = await host.call<{ path?: string }>("worktree.location", { sessionId });
+      return location.path?.trim() || null;
+    }
+    return res?.session?.projectPath?.trim() || null;
+  };
+  s.setProjectInstructionResolver(async ({ sessionId, projectPath, path }) => {
     // The root is registered by Electron main from the host-owned session
     // record. The sidecar can provide a target path, never an arbitrary root.
     const instructions = await loadInstructionChain(projectPath, path);
     if (!projectPath || !runtimeState.host) return instructions;
+    // An isolated session registers its worktree as the root (ADR 0326); the
+    // group context stays keyed by the session's project, and the group's
+    // other roots are not advertised inside the worktree.
+    const project = sessionProjects.get(sessionId) ?? projectPath;
+    const isolated = project !== projectPath;
     try {
       const result = await runtimeState.host.call<{
         context?: {
           roots?: Array<{ path?: string }>;
           instructions?: string;
         } | null;
-      }>("project.group.context", { path: projectPath });
+      }>("project.group.context", { path: project });
       const roots = result.context?.roots ?? [];
-      const rootGuide = roots.length > 1
+      const rootGuide = !isolated && roots.length > 1
         ? [
             `Primary root: ${roots[0]?.path ?? projectPath}`,
             ...roots.slice(1).map((root) => `Additional root: ${root.path ?? ""}`),
@@ -556,10 +575,7 @@ export function createSidecarRuntime({
     }
     let root: string | null = null;
     try {
-      const res = (await runtimeState.host?.call("session.get", { id: sessionId })) as
-        | { session: { projectPath?: string } | null }
-        | undefined;
-      root = res?.session?.projectPath?.trim() || null;
+      root = await sessionFileRoot(sessionId);
     } catch {
       root = null;
     }
@@ -642,10 +658,7 @@ export function createSidecarRuntime({
   registerPluginDevTools(s, {
     resolveWorkspace: async (sessionId) => {
       try {
-        const res = (await runtimeState.host?.call("session.get", { id: sessionId })) as
-          | { session: { projectPath?: string } | null }
-          | undefined;
-        return res?.session?.projectPath?.trim() || null;
+        return await sessionFileRoot(sessionId);
       } catch {
         return null;
       }

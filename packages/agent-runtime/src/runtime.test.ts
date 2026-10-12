@@ -18,6 +18,7 @@ import {
   COMPACTION_FALLBACK_MARKER,
   DesktopAgentRuntime,
   PATH_INSTRUCTION_RESOLUTION_TIMEOUT_MS,
+  isolatedWorkspaceGuidance,
   looksLikePseudoToolCall,
   toolResultFromUi,
   type CompactionStrategy,
@@ -167,6 +168,7 @@ function createRuntime(
     compactionSettings: ContextCompactionSettings;
     compactionStrategy: CompactionStrategy;
     projectPath: string;
+    workspaceRoot: string;
     scratchDir: string;
     customSystemPrompt: import("./custom-system-prompt.js").CustomSystemPrompt;
     projectInstructions: import("./project-instructions.js").ProjectInstructions;
@@ -197,6 +199,7 @@ function createRuntime(
     compactionSettings: overrides.compactionSettings,
     compactionStrategy: overrides.compactionStrategy,
     projectPath: overrides.projectPath,
+    workspaceRoot: overrides.workspaceRoot,
     scratchDir: overrides.scratchDir,
     customSystemPrompt: overrides.customSystemPrompt,
     pluginTools: overrides.pluginTools,
@@ -257,6 +260,7 @@ function runtimeMatches(
     customSystemPrompt: (runtime as any).customSystemPrompt,
     projectMemory: (runtime as any).projectMemory,
     projectPath: (runtime as any).projectPath,
+    workspaceRoot: (runtime as any).workspaceRoot,
     commandShell: (runtime as any).commandShell,
     subagents: (runtime as any).subagents,
     subagentProviders: (runtime as any).subagentProviders,
@@ -11732,5 +11736,37 @@ describe("inline image placement", () => {
     } finally {
       await runtime.dispose();
     }
+  });
+});
+
+describe("isolated session workspace (ADR 0326)", () => {
+  const systemPrompt = (runtime: DesktopAgentRuntime): string =>
+    (runtime as unknown as { agent: { state: { systemPrompt: string } } }).agent.state
+      .systemPrompt;
+
+  it("tells the model about the worktree only in an isolated session", () => {
+    const isolated = createRuntime({ projectPath: "/work/app", workspaceRoot: "/data/wt/app/s1" });
+    const ordinary = createRuntime({ projectPath: "/work/app" });
+    expect(systemPrompt(isolated)).toContain(isolatedWorkspaceGuidance());
+    expect(systemPrompt(isolated)).toContain("PI_PORT");
+    expect(systemPrompt(ordinary)).not.toContain("Isolated session:");
+  });
+
+  it("works in the worktree while the project stays its identity", () => {
+    const runtime = createRuntime({ projectPath: "/work/app", workspaceRoot: "/data/wt/app/s1" });
+    const internals = runtime as unknown as { extensionCwd(): string; projectPath?: string };
+    expect(internals.extensionCwd()).toBe("/data/wt/app/s1");
+    expect(internals.projectPath).toBe("/work/app");
+    expect(
+      (createRuntime({ projectPath: "/work/app" }) as unknown as { extensionCwd(): string })
+        .extensionCwd(),
+    ).toBe("/work/app");
+  });
+
+  it("is not reused for another worktree or for a non-isolated launch", () => {
+    const runtime = createRuntime({ projectPath: "/work/app", workspaceRoot: "/data/wt/app/s1" });
+    expect(runtimeMatches(runtime)).toBe(true);
+    expect(runtimeMatches(runtime, { workspaceRoot: "/data/wt/app/s2" })).toBe(false);
+    expect(runtimeMatches(runtime, { workspaceRoot: undefined })).toBe(false);
   });
 });
